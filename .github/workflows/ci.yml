@@ -60,6 +60,15 @@ jobs:
           grep -F "[stdout-demo:stdout] out" "$log_dir/stdout-demo.log"
           grep -F "[stderr-demo:stderr] err" "$log_dir/stderr-demo.log"
 
+      - name: Smoke test critical failure
+        run: |
+          set -euo pipefail
+          set +e
+          zig-out/bin/runmux run --plain --config testdata/critical.runmux.json --exit-on-critical-failure
+          status=$?
+          set -e
+          test "$status" -eq 4
+
       - name: Smoke test invalid config
         run: |
           set -euo pipefail

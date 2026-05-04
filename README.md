@@ -22,7 +22,7 @@ zig build run -- run
 ## Commands
 
 ```sh
-runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs]
+runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure]
 runmux check [--config runmux.json] [--profile dev]
 runmux init [--config runmux.json]
 runmux list [--config runmux.json] [--profile dev]
@@ -30,7 +30,7 @@ runmux --help
 runmux --version
 ```
 
-`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process.
+`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process. Use `--exit-on-critical-failure` to stop the run when a `critical` process fails.
 
 ## Config File
 
@@ -103,7 +103,7 @@ q or Ctrl+C     stop children and quit
 - This is not a pseudo-terminal multiplexer; interactive child stdin is not forwarded.
 - Child process stdout/stderr are piped into the TUI, so programs that require a real TTY may behave differently.
 - ANSI escape sequences are stripped for display safety.
-- Direct child processes are stopped; grandchildren may survive if the command spawns its own process tree.
+- POSIX child processes are started in a dedicated process group so stop/kill targets their process tree. Windows process-tree cleanup is still incomplete.
 - Unicode width handling is delegated to libvaxis, but complex logs can still render imperfectly in some terminals.
 
 ## Development

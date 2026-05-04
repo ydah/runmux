@@ -18,6 +18,7 @@ pub const Options = struct {
     profile_name: ?[]const u8 = null,
     plain: bool = false,
     log_dir: ?[]const u8 = null,
+    exit_on_critical_failure: bool = false,
 };
 
 pub const ParseError = error{
@@ -65,6 +66,10 @@ pub fn parse(args: []const [:0]const u8) ParseError!Options {
             result.log_dir = args[index];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--exit-on-critical-failure")) {
+            result.exit_on_critical_failure = true;
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--")) return error.UnknownOption;
 
         if (command_seen) return error.TooManyCommands;
@@ -87,7 +92,7 @@ pub const help_text =
     \\runmux - lightweight TUI command runner
     \\
     \\Usage:
-    \\  runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs]
+    \\  runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure]
     \\  runmux check [--config runmux.json] [--profile dev]
     \\  runmux init [--config runmux.json]
     \\  runmux list [--config runmux.json] [--profile dev]
@@ -129,4 +134,11 @@ test "parse log dir option" {
     const opts = try parse(&args);
     try std.testing.expectEqual(Command.run, opts.command);
     try std.testing.expectEqualStrings("logs", opts.log_dir.?);
+}
+
+test "parse exit on critical failure option" {
+    const args = [_][:0]const u8{ "runmux", "run", "--exit-on-critical-failure" };
+    const opts = try parse(&args);
+    try std.testing.expectEqual(Command.run, opts.command);
+    try std.testing.expect(opts.exit_on_critical_failure);
 }

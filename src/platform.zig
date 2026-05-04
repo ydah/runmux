@@ -23,18 +23,32 @@ pub fn directArgv(allocator: std.mem.Allocator, cmd: []const u8) ![]const []cons
     return argv;
 }
 
-pub fn sendTerm(pid: std.process.Child.Id) void {
+pub fn childProcessGroupId() ?std.posix.pid_t {
+    return switch (builtin.os.tag) {
+        .windows, .wasi => null,
+        else => 0,
+    };
+}
+
+pub fn sendTerm(pid: std.process.Child.Id, process_group: bool) void {
     switch (builtin.os.tag) {
         .windows => {},
-        else => std.posix.kill(pid, .TERM) catch {},
+        else => sendSignal(pid, process_group, .TERM),
     }
 }
 
-pub fn sendKill(pid: std.process.Child.Id) void {
+pub fn sendKill(pid: std.process.Child.Id, process_group: bool) void {
     switch (builtin.os.tag) {
         .windows => {},
-        else => std.posix.kill(pid, .KILL) catch {},
+        else => sendSignal(pid, process_group, .KILL),
     }
+}
+
+fn sendSignal(pid: std.process.Child.Id, process_group: bool, signal: std.posix.SIG) void {
+    const target = if (process_group) -pid else pid;
+    std.posix.kill(target, signal) catch {
+        std.posix.kill(pid, signal) catch {};
+    };
 }
 
 pub fn pidToU64(pid: std.process.Child.Id) u64 {

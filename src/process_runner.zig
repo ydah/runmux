@@ -12,6 +12,7 @@ pub const ProcessRunner = struct {
     stdout_thread: ?std.Thread = null,
     stderr_thread: ?std.Thread = null,
     wait_thread: ?std.Thread = null,
+    process_group: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, process_id: u32, queue: *event_queue.EventQueue) ProcessRunner {
         return .{
@@ -51,6 +52,7 @@ pub const ProcessRunner = struct {
             .stdin = .ignore,
             .stdout = .pipe,
             .stderr = .pipe,
+            .pgid = platform.childProcessGroupId(),
         });
         errdefer child.kill(io);
 
@@ -87,7 +89,7 @@ pub const ProcessRunner = struct {
             .file = stderr_file,
             .io = io,
         }}) catch |err| {
-            platform.sendTerm(pid);
+            platform.sendTerm(pid, platform.childProcessGroupId() != null);
             stderr_file.close(io);
             child_ptr.kill(io);
             return err;
@@ -101,7 +103,7 @@ pub const ProcessRunner = struct {
             .child = child_ptr,
             .io = io,
         }}) catch |err| {
-            platform.sendTerm(pid);
+            platform.sendTerm(pid, platform.childProcessGroupId() != null);
             child_ptr.kill(io);
             return err;
         };
@@ -110,6 +112,7 @@ pub const ProcessRunner = struct {
         self.stdout_thread = stdout_thread;
         self.stderr_thread = stderr_thread;
         self.wait_thread = wait_thread;
+        self.process_group = platform.childProcessGroupId() != null;
 
         return pid;
     }
@@ -117,13 +120,13 @@ pub const ProcessRunner = struct {
     pub fn stop(self: *ProcessRunner) void {
         const child = self.child orelse return;
         const pid = child.id orelse return;
-        platform.sendTerm(pid);
+        platform.sendTerm(pid, self.process_group);
     }
 
     pub fn kill(self: *ProcessRunner) void {
         const child = self.child orelse return;
         const pid = child.id orelse return;
-        platform.sendKill(pid);
+        platform.sendKill(pid, self.process_group);
     }
 
     pub fn join(self: *ProcessRunner, io: std.Io) void {
@@ -137,6 +140,7 @@ pub const ProcessRunner = struct {
         self.stdout_thread = null;
         self.stderr_thread = null;
         self.wait_thread = null;
+        self.process_group = false;
     }
 };
 

@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
         .init => try commandInit(io, parsed.config_path),
         .check => try commandCheck(allocator, io, parsed.config_path, parsed.profile_name),
         .list => try commandList(allocator, io, parsed.config_path, parsed.profile_name),
-        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain, parsed.log_dir),
+        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain, parsed.log_dir, parsed.exit_on_critical_failure),
     }
 }
 
@@ -105,6 +105,7 @@ fn commandRun(
     profile_name: ?[]const u8,
     plain: bool,
     log_dir: ?[]const u8,
+    exit_on_critical_failure: bool,
 ) !void {
     var diagnostics = config.Diagnostics.init(allocator);
     defer diagnostics.deinit();
@@ -117,6 +118,7 @@ fn commandRun(
 
     const run_options: runmux.supervisor.Options = .{
         .log_dir = log_dir,
+        .exit_on_critical_failure = exit_on_critical_failure,
     };
 
     if (plain) {

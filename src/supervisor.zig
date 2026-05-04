@@ -462,6 +462,7 @@ pub const Supervisor = struct {
         }
 
         process.status = if (failed) .failed else .exited;
+        if (failed and self.handleCriticalFailure(process)) return;
         self.scheduleRestart(process, failed);
     }
 
@@ -518,6 +519,16 @@ pub const Supervisor = struct {
 
     fn refreshPausedLogEnd(self: *Supervisor) void {
         if (self.paused) self.paused_log_end = self.currentLogCount();
+    }
+
+    fn handleCriticalFailure(self: *Supervisor, process: *RuntimeProcess) bool {
+        if (!self.options.exit_on_critical_failure or !process.spec.critical) return false;
+        self.appendSystem(process, "critical process failed; stopping all", .{}) catch {};
+        for (self.processes) |*other| {
+            if (other.id != process.id) self.stopProcess(other);
+        }
+        self.should_quit = true;
+        return true;
     }
 
     fn applyTerm(self: *Supervisor, process: *RuntimeProcess, term: event_queue.TermInfo) bool {
