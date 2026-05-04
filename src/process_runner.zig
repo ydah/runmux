@@ -172,9 +172,14 @@ fn readerThread(context: ReaderContext) void {
 
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const n = std.posix.read(file.handle, buffer[0..]) catch |err| {
-            postError(context.allocator, context.queue, context.process_id, "read failed: {s}", .{@errorName(err)});
-            return;
+        const n = file.readStreaming(context.io, &.{buffer[0..]}) catch |err| {
+            switch (err) {
+                error.EndOfStream => return,
+                else => {
+                    postError(context.allocator, context.queue, context.process_id, "read failed: {s}", .{@errorName(err)});
+                    return;
+                },
+            }
         };
         if (n == 0) return;
 

@@ -39,14 +39,14 @@ pub fn childProcessGroupId() ?std.posix.pid_t {
 
 pub fn sendTerm(pid: std.process.Child.Id, process_group: bool) void {
     switch (builtin.os.tag) {
-        .windows => {},
+        .windows => terminateWindows(pid, 1),
         else => sendSignal(pid, process_group, .TERM),
     }
 }
 
 pub fn sendKill(pid: std.process.Child.Id, process_group: bool) void {
     switch (builtin.os.tag) {
-        .windows => {},
+        .windows => terminateWindows(pid, 1),
         else => sendSignal(pid, process_group, .KILL),
     }
 }
@@ -64,4 +64,16 @@ pub fn pidToU64(pid: std.process.Child.Id) u64 {
         .wasi => 0,
         else => @intCast(pid),
     };
+}
+
+fn terminateWindows(pid: std.process.Child.Id, exit_code: u32) void {
+    if (builtin.os.tag != .windows) unreachable;
+
+    const windows = std.os.windows;
+    const status: windows.NTSTATUS = @enumFromInt(exit_code);
+    _ = windows.ntdll.RtlReportSilentProcessExit(pid, status);
+    switch (windows.ntdll.NtTerminateProcess(pid, status)) {
+        .SUCCESS, .PROCESS_IS_TERMINATING, .ACCESS_DENIED => {},
+        else => {},
+    }
 }
