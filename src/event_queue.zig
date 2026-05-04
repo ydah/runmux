@@ -24,10 +24,19 @@ pub const ProcessError = struct {
     message: []u8,
 };
 
+pub const HealthCheckResult = struct {
+    process_id: u32,
+    generation: u32,
+    healthy: bool,
+    timed_out: bool,
+    message: ?[]u8 = null,
+};
+
 pub const AppEvent = union(enum) {
     process_output: ProcessOutput,
     process_exited: ProcessExited,
     process_error: ProcessError,
+    health_check_result: HealthCheckResult,
 };
 
 pub const EventQueue = struct {
@@ -72,6 +81,7 @@ pub fn freeEvent(allocator: std.mem.Allocator, event: *AppEvent) void {
     switch (event.*) {
         .process_output => |output| allocator.free(output.bytes),
         .process_error => |process_error| allocator.free(process_error.message),
+        .health_check_result => |result| if (result.message) |message| allocator.free(message),
         .process_exited => {},
     }
 }

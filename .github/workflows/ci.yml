@@ -98,6 +98,19 @@ jobs:
           grep -F "[db:system] health ok" <<<"$output"
           grep -F "[app:stdout] app" <<<"$output"
 
+      - name: Smoke test health timeout
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(zig-out/bin/runmux run --plain --config testdata/health_timeout.runmux.json 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 4
+          grep -F "[svc:system] health check timed out" <<<"$output"
+          grep -F "[svc:system] health check failed; stopping" <<<"$output"
+
       - name: Smoke test TOML config
         if: runner.os != 'Windows'
         run: |

@@ -48,6 +48,12 @@ pub const Options = struct {
     theme: Theme = .dark,
 };
 
+const HealthSlot = struct {
+    mutex: std.Io.Mutex = .init,
+    child: ?*std.process.Child = null,
+    timed_out: bool = false,
+};
+
 pub const RuntimeProcess = struct {
     id: u32,
     spec: *const config.ProcessSpec,
@@ -65,6 +71,10 @@ pub const RuntimeProcess = struct {
     health_status: HealthStatus = .none,
     health_attempts: u32 = 0,
     next_health_check_ms: ?i64 = null,
+    health_timeout_due_ms: ?i64 = null,
+    health_generation: u32 = 0,
+    health_thread: ?std.Thread = null,
+    health_slot: HealthSlot = .{},
     stop_requested: bool = false,
     pending_manual_restart: bool = false,
     stdout_assembler: line_assembler.LineAssembler,
@@ -154,6 +164,8 @@ pub const Supervisor = struct {
 
     pub fn deinit(self: *Supervisor) void {
         for (self.processes) |*process| {
+            self.cancelHealthCheck(process);
+            self.joinHealthCheck(process);
             process.runner.kill();
             process.runner.join(self.io);
             process.stdout_assembler.deinit();
@@ -187,6 +199,7 @@ pub const Supervisor = struct {
                 .process_output => |output| try self.handleOutput(output),
                 .process_exited => |exited| self.handleExited(exited),
                 .process_error => |process_error| try self.handleError(process_error),
+                .health_check_result => |result| self.handleHealthResult(result),
             }
         }
     }
@@ -215,8 +228,12 @@ pub const Supervisor = struct {
                 self.startProcess(process);
             }
             if (process.status == .running and process.health_status == .checking) {
-                if (process.next_health_check_ms) |due| {
-                    if (now >= due) self.runHealthCheck(process, now);
+                if (process.health_thread != null) {
+                    if (process.health_timeout_due_ms) |due| {
+                        if (now >= due) self.timeoutHealthCheck(process);
+                    }
+                } else if (process.next_health_check_ms) |due| {
+                    if (now >= due) self.startHealthCheck(process, now);
                 }
             }
         }
@@ -423,12 +440,15 @@ pub const Supervisor = struct {
             else => {},
         }
 
+        self.cancelHealthCheck(process);
+        self.joinHealthCheck(process);
         process.status = .starting;
         process.start_when_dependencies_ready = false;
         process.dependency_wait_logged = false;
         process.health_status = .none;
         process.health_attempts = 0;
         process.next_health_check_ms = null;
+        process.health_timeout_due_ms = null;
         process.stop_requested = false;
         process.pending_manual_restart = false;
         process.stop_kill_due_ms = null;
@@ -468,6 +488,7 @@ pub const Supervisor = struct {
     fn stopProcess(self: *Supervisor, process: *RuntimeProcess) void {
         switch (process.status) {
             .running, .starting => {
+                self.cancelHealthCheck(process);
                 process.stop_requested = true;
                 process.status = .stopping;
                 process.stop_kill_due_ms = nowMs(self.io) + 2000;
@@ -484,6 +505,7 @@ pub const Supervisor = struct {
                 self.appendSystem(process, "restart canceled", .{}) catch {};
             },
             .pending => {
+                self.cancelHealthCheck(process);
                 process.start_when_dependencies_ready = false;
                 process.status = .exited;
                 self.appendSystem(process, "start canceled", .{}) catch {};
@@ -518,6 +540,8 @@ pub const Supervisor = struct {
 
     fn handleExited(self: *Supervisor, exited: event_queue.ProcessExited) void {
         const process = self.processById(exited.process_id) orelse return;
+        self.cancelHealthCheck(process);
+        self.joinHealthCheck(process);
         process.runner.join(self.io);
         process.pid = null;
         process.restart_due_ms = null;
@@ -630,23 +654,75 @@ pub const Supervisor = struct {
         return true;
     }
 
-    fn runHealthCheck(self: *Supervisor, process: *RuntimeProcess, now: i64) void {
-        const healthy = self.executeHealthCheck(process) catch |err| blk: {
+    fn startHealthCheck(self: *Supervisor, process: *RuntimeProcess, now: i64) void {
+        if (process.health_thread != null) return;
+        const health = process.spec.health.?;
+        process.health_generation +%= 1;
+        const generation = process.health_generation;
+        process.health_timeout_due_ms = now + @as(i64, @intCast(health.timeout_ms));
+        process.next_health_check_ms = null;
+
+        process.health_thread = std.Thread.spawn(.{}, healthThread, .{HealthThreadContext{
+            .allocator = self.allocator,
+            .io = self.io,
+            .queue = self.queue,
+            .process_id = process.id,
+            .generation = generation,
+            .parent_env = self.parent_env,
+            .spec = process.spec,
+            .slot = &process.health_slot,
+        }}) catch |err| {
+            process.health_timeout_due_ms = null;
             self.setLastError(process, @errorName(err));
-            break :blk false;
+            self.markHealthFailure(process, now, "health check spawn failed");
+            return;
         };
-        if (healthy) {
+    }
+
+    fn timeoutHealthCheck(self: *Supervisor, process: *RuntimeProcess) void {
+        var child_to_kill: ?std.process.Child.Id = null;
+        process.health_slot.mutex.lockUncancelable(self.io);
+        if (!process.health_slot.timed_out) {
+            process.health_slot.timed_out = true;
+            if (process.health_slot.child) |child| child_to_kill = child.id;
+        }
+        process.health_slot.mutex.unlock(self.io);
+
+        if (child_to_kill) |pid| platform.sendKill(pid, platform.childProcessGroupId() != null);
+        process.health_timeout_due_ms = null;
+        self.appendSystem(process, "health check timed out", .{}) catch {};
+    }
+
+    fn handleHealthResult(self: *Supervisor, result: event_queue.HealthCheckResult) void {
+        const process = self.processById(result.process_id) orelse return;
+        if (result.generation != process.health_generation) return;
+
+        self.joinHealthCheck(process);
+        process.health_timeout_due_ms = null;
+        if (process.status != .running or process.health_status != .checking) return;
+
+        if (result.healthy) {
             process.health_status = .healthy;
             process.next_health_check_ms = null;
             self.appendSystem(process, "health ok", .{}) catch {};
             return;
         }
 
+        if (result.message) |message| self.setLastError(process, message);
+        if (result.timed_out) {
+            self.markHealthFailure(process, nowMs(self.io), "health check timed out");
+        } else {
+            self.markHealthFailure(process, nowMs(self.io), "health check failed");
+        }
+    }
+
+    fn markHealthFailure(self: *Supervisor, process: *RuntimeProcess, now: i64, message: []const u8) void {
         process.health_attempts += 1;
         const health = process.spec.health.?;
         if (process.health_attempts < health.retries) {
             process.next_health_check_ms = now + @as(i64, @intCast(health.interval_ms));
-            self.appendSystem(process, "health check failed; retrying {d}/{d}", .{
+            self.appendSystem(process, "{s}; retrying {d}/{d}", .{
+                message,
                 process.health_attempts,
                 health.retries,
             }) catch {};
@@ -663,34 +739,29 @@ pub const Supervisor = struct {
         process.runner.stop();
     }
 
-    fn executeHealthCheck(self: *Supervisor, process: *const RuntimeProcess) !bool {
-        const health = process.spec.health.?;
-        var env = try self.parent_env.clone(self.allocator);
-        defer env.deinit();
-        for (process.spec.env) |entry| {
-            try env.put(entry.key, entry.value);
+    fn cancelHealthCheck(self: *Supervisor, process: *RuntimeProcess) void {
+        process.health_generation +%= 1;
+        process.health_timeout_due_ms = null;
+        process.next_health_check_ms = null;
+
+        var child_to_kill: ?std.process.Child.Id = null;
+        process.health_slot.mutex.lockUncancelable(self.io);
+        process.health_slot.timed_out = true;
+        if (process.health_slot.child) |child| child_to_kill = child.id;
+        process.health_slot.mutex.unlock(self.io);
+
+        if (child_to_kill) |pid| platform.sendKill(pid, platform.childProcessGroupId() != null);
+    }
+
+    fn joinHealthCheck(self: *Supervisor, process: *RuntimeProcess) void {
+        if (process.health_thread) |thread| {
+            thread.join();
+            process.health_thread = null;
         }
-
-        const argv = if (health.cmd) |cmd|
-            try platform.shellArgv(self.allocator, cmd, platform.shellPath(self.parent_env))
-        else
-            health.argv;
-        defer if (health.cmd != null) self.allocator.free(argv);
-
-        var child = try std.process.spawn(self.io, .{
-            .argv = argv,
-            .cwd = .{ .path = process.spec.cwd },
-            .environ_map = &env,
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-            .pgid = platform.childProcessGroupId(),
-        });
-        const term = try child.wait(self.io);
-        return switch (term) {
-            .exited => |code| code == 0,
-            else => false,
-        };
+        process.health_slot.mutex.lockUncancelable(self.io);
+        process.health_slot.child = null;
+        process.health_slot.timed_out = false;
+        process.health_slot.mutex.unlock(self.io);
     }
 
     fn handleCriticalFailure(self: *Supervisor, process: *RuntimeProcess) bool {
@@ -729,6 +800,107 @@ pub const Supervisor = struct {
         process.last_error = if (message) |text| self.allocator.dupe(u8, text) catch null else null;
     }
 };
+
+const HealthThreadContext = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    queue: *event_queue.EventQueue,
+    process_id: u32,
+    generation: u32,
+    parent_env: *const std.process.Environ.Map,
+    spec: *const config.ProcessSpec,
+    slot: *HealthSlot,
+};
+
+fn healthThread(context: HealthThreadContext) void {
+    const healthy = executeHealthCheck(context) catch |err| {
+        postHealthResult(context, false, false, @errorName(err));
+        return;
+    };
+    const timed_out = healthSlotTimedOut(context);
+    postHealthResult(context, healthy and !timed_out, timed_out, null);
+}
+
+fn executeHealthCheck(context: HealthThreadContext) !bool {
+    const health = context.spec.health.?;
+    var env = try context.parent_env.clone(context.allocator);
+    defer env.deinit();
+    for (context.spec.env) |entry| {
+        try env.put(entry.key, entry.value);
+    }
+
+    const argv = if (health.cmd) |cmd|
+        try platform.shellArgv(context.allocator, cmd, platform.shellPath(context.parent_env))
+    else
+        health.argv;
+    defer if (health.cmd != null) context.allocator.free(argv);
+
+    const child = try std.process.spawn(context.io, .{
+        .argv = argv,
+        .cwd = .{ .path = context.spec.cwd },
+        .environ_map = &env,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .pgid = platform.childProcessGroupId(),
+    });
+
+    const child_ptr = try context.allocator.create(std.process.Child);
+    child_ptr.* = child;
+    defer context.allocator.destroy(child_ptr);
+
+    var kill_immediately = false;
+    context.slot.mutex.lockUncancelable(context.io);
+    if (context.slot.timed_out) {
+        kill_immediately = true;
+    } else {
+        context.slot.child = child_ptr;
+    }
+    context.slot.mutex.unlock(context.io);
+
+    if (kill_immediately) {
+        if (child_ptr.id) |pid| platform.sendKill(pid, platform.childProcessGroupId() != null);
+    }
+
+    const term = child_ptr.wait(context.io) catch |err| {
+        clearHealthChild(context, child_ptr);
+        return err;
+    };
+    clearHealthChild(context, child_ptr);
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+fn clearHealthChild(context: HealthThreadContext, child: *std.process.Child) void {
+    context.slot.mutex.lockUncancelable(context.io);
+    if (context.slot.child == child) context.slot.child = null;
+    context.slot.mutex.unlock(context.io);
+}
+
+fn healthSlotTimedOut(context: HealthThreadContext) bool {
+    context.slot.mutex.lockUncancelable(context.io);
+    defer context.slot.mutex.unlock(context.io);
+    return context.slot.timed_out;
+}
+
+fn postHealthResult(context: HealthThreadContext, healthy: bool, timed_out: bool, message: ?[]const u8) void {
+    const owned_message = if (message) |text|
+        context.allocator.dupe(u8, text) catch null
+    else
+        null;
+
+    context.queue.push(.{ .health_check_result = .{
+        .process_id = context.process_id,
+        .generation = context.generation,
+        .healthy = healthy,
+        .timed_out = timed_out,
+        .message = owned_message,
+    } }) catch {
+        if (owned_message) |text| context.allocator.free(text);
+    };
+}
 
 fn openLogFiles(
     allocator: std.mem.Allocator,

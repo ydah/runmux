@@ -47,10 +47,11 @@ const HealthBuilder = struct {
     argv_set: bool = false,
     argv: std.ArrayList([]const u8) = .empty,
     interval_ms: ?u32 = null,
+    timeout_ms: ?u32 = null,
     retries: ?u32 = null,
 
     fn hasAny(self: HealthBuilder) bool {
-        return self.set or self.cmd != null or self.argv_set or self.interval_ms != null or self.retries != null;
+        return self.set or self.cmd != null or self.argv_set or self.interval_ms != null or self.timeout_ms != null or self.retries != null;
     }
 };
 
@@ -306,6 +307,10 @@ const Parser = struct {
         }
         if (std.mem.eql(u8, key, "interval_ms")) {
             process.health.interval_ms = try expectInt(value);
+            return;
+        }
+        if (std.mem.eql(u8, key, "timeout_ms")) {
+            process.health.timeout_ms = try expectInt(value);
             return;
         }
         if (std.mem.eql(u8, key, "retries")) {
@@ -641,6 +646,7 @@ fn writeHealthJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), health
     if (health.cmd) |cmd| try writeStringField(allocator, out, &first, "cmd", cmd);
     if (health.argv_set) try writeStringArrayField(allocator, out, &first, "argv", health.argv.items);
     if (health.interval_ms) |interval_ms| try writeIntField(allocator, out, &first, "interval_ms", interval_ms);
+    if (health.timeout_ms) |timeout_ms| try writeIntField(allocator, out, &first, "timeout_ms", timeout_ms);
     if (health.retries) |retries| try writeIntField(allocator, out, &first, "retries", retries);
     try out.append(allocator, '}');
 }
@@ -779,6 +785,7 @@ test "toml_config_converts_runmux_schema_to_json" {
         \\[profiles.processes.health]
         \\argv = ["/bin/sh", "-c", "exit 0"]
         \\interval_ms = 10
+        \\timeout_ms = 100
         \\retries = 2
     ;
 

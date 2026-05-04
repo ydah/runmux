@@ -24,6 +24,7 @@ pub const HealthSpec = struct {
     cmd: ?[]const u8,
     argv: []const []const u8,
     interval_ms: u32 = 1000,
+    timeout_ms: u32 = 5000,
     retries: u32 = 30,
 };
 
@@ -122,6 +123,7 @@ const RawHealthSpec = struct {
     cmd: ?[]const u8 = null,
     argv: ?[]const []const u8 = null,
     interval_ms: ?u32 = null,
+    timeout_ms: ?u32 = null,
     retries: ?u32 = null,
 };
 
@@ -534,11 +536,19 @@ fn resolveHealth(
             process_name,
         });
     }
+    const timeout_ms = raw_health.timeout_ms orelse 5000;
+    if (timeout_ms == 0) {
+        return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": health.timeout_ms must be at least 1", .{
+            profile_name,
+            process_name,
+        });
+    }
 
     return .{
         .cmd = raw_health.cmd,
         .argv = argv,
         .interval_ms = interval_ms,
+        .timeout_ms = timeout_ms,
         .retries = retries,
     };
 }
@@ -683,6 +693,7 @@ pub const sample_config =
     \\          "health": {
     \\            "argv": ["/bin/sh", "-c", "exit 0"],
     \\            "interval_ms": 1000,
+    \\            "timeout_ms": 5000,
     \\            "retries": 3
     \\          },
     \\          "autostart": false
@@ -801,6 +812,7 @@ test "config_resolves_health_check" {
 
     const health = loaded.profile.processes[0].health.?;
     try std.testing.expectEqual(@as(u32, 10), health.interval_ms);
+    try std.testing.expectEqual(@as(u32, 5000), health.timeout_ms);
     try std.testing.expectEqual(@as(u32, 2), health.retries);
     try std.testing.expectEqualStrings("/bin/sh", health.argv[0]);
 }
@@ -814,6 +826,17 @@ test "config_rejects_invalid_health_check" {
     defer diagnostics.deinit();
     try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
     try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "health") != null);
+}
+
+test "config_rejects_invalid_health_timeout" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"api","cmd":"sleep 1","health":{"argv":["/bin/sh","-c","exit 0"],"timeout_ms":0}}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "timeout") != null);
 }
 
 test "config_rejects_shell_false_cmd_with_whitespace" {
@@ -852,6 +875,7 @@ test "config_resolves_toml" {
         \\[profiles.processes.health]
         \\argv = ["/bin/sh", "-c", "exit 0"]
         \\interval_ms = 10
+        \\timeout_ms = 100
         \\retries = 2
     ;
 
@@ -865,4 +889,5 @@ test "config_resolves_toml" {
     try std.testing.expectEqualStrings("db", loaded.profile.processes[1].depends_on[0]);
     try std.testing.expect(loaded.profile.processes[1].critical);
     try std.testing.expectEqual(@as(u32, 10), loaded.profile.processes[1].health.?.interval_ms);
+    try std.testing.expectEqual(@as(u32, 100), loaded.profile.processes[1].health.?.timeout_ms);
 }

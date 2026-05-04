@@ -20,4 +20,5 @@ argv = ["/bin/sh", "-c", "sleep 0.1; printf 'ready\n'"]
 [profiles.processes.health]
 argv = ["/bin/sh", "-c", "exit 0"]
 interval_ms = 10
+timeout_ms = 1000
 retries = 2

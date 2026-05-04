@@ -73,6 +73,7 @@ The default config file is `runmux.json`. Files ending in `.toml` are accepted w
           "health": {
             "argv": ["/bin/sh", "-c", "exit 0"],
             "interval_ms": 1000,
+            "timeout_ms": 5000,
             "retries": 3
           },
           "autostart": false
@@ -84,6 +85,7 @@ The default config file is `runmux.json`. Files ending in `.toml` are accepted w
 ```
 
 Each process must set exactly one of `cmd` or `argv`. `cmd` runs through the shell by default. If `shell` is set to `false`, `cmd` must be a single executable path with no arguments; use `argv` for direct execution with arguments. Set `depends_on` to delay a process until dependencies are ready. A dependency is ready when it is running with no health check, has passed its health check, or has exited successfully.
+Health checks run asynchronously and support `timeout_ms`; a timeout counts as a failed attempt and the process is stopped after `retries` is exhausted.
 
 Equivalent TOML:
 
@@ -121,6 +123,7 @@ autostart = false
 [profiles.processes.health]
 argv = ["/bin/sh", "-c", "exit 0"]
 interval_ms = 1000
+timeout_ms = 5000
 retries = 3
 ```
 

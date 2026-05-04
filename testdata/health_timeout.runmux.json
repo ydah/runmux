@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "svc",
+          "argv": ["/bin/sh", "-c", "sleep 2"],
+          "health": {
+            "argv": ["/bin/sh", "-c", "sleep 1"],
+            "interval_ms": 10,
+            "timeout_ms": 50,
+            "retries": 1
+          }
+        }
+      ]
+    }
+  ]
+}
