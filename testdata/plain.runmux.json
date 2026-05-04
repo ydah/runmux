@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "stdout-demo",
+          "argv": ["/bin/sh", "-c", "printf 'out\\n'"]
+        },
+        {
+          "name": "stderr-demo",
+          "argv": ["/bin/sh", "-c", "printf 'err\\n' >&2"]
+        }
+      ]
+    }
+  ]
+}

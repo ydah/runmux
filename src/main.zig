@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
         .init => try commandInit(io, parsed.config_path),
         .check => try commandCheck(allocator, io, parsed.config_path, parsed.profile_name),
         .list => try commandList(allocator, io, parsed.config_path, parsed.profile_name),
-        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name),
+        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain),
     }
 }
 
@@ -103,6 +103,7 @@ fn commandRun(
     environ_map: *std.process.Environ.Map,
     path: []const u8,
     profile_name: ?[]const u8,
+    plain: bool,
 ) !void {
     var diagnostics = config.Diagnostics.init(allocator);
     defer diagnostics.deinit();
@@ -112,6 +113,19 @@ fn commandRun(
         std.process.exit(2);
     };
     defer loaded.deinit();
+
+    if (plain) {
+        runmux.plain.run(allocator, io, environ_map, &loaded.profile) catch |err| {
+            switch (err) {
+                error.ChildFailed => std.process.exit(4),
+                else => {
+                    try printErr(io, "error: plain run failed: {s}\n", .{@errorName(err)});
+                    std.process.exit(5);
+                },
+            }
+        };
+        return;
+    }
 
     runmux.ui.run(allocator, io, environ_map, &loaded.profile) catch |err| {
         try printErr(io, "error: TUI failed: {s}\n", .{@errorName(err)});

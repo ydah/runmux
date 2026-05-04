@@ -49,6 +49,14 @@ jobs:
           zig-out/bin/runmux check --config runmux.example.json
           zig-out/bin/runmux list --config runmux.example.json
 
+      - name: Smoke test plain mode
+        run: |
+          set -euo pipefail
+          output="$(zig-out/bin/runmux run --plain --config testdata/plain.runmux.json 2>&1)"
+          printf '%s\n' "$output"
+          grep -F "[stdout-demo:stdout] out" <<<"$output"
+          grep -F "[stderr-demo:stderr] err" <<<"$output"
+
       - name: Smoke test invalid config
         run: |
           set -euo pipefail

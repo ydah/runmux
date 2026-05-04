@@ -16,6 +16,7 @@ pub const Options = struct {
     command: Command = .run,
     config_path: []const u8 = default_config_path,
     profile_name: ?[]const u8 = null,
+    plain: bool = false,
 };
 
 pub const ParseError = error{
@@ -53,6 +54,10 @@ pub fn parse(args: []const [:0]const u8) ParseError!Options {
             result.profile_name = args[index];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--plain")) {
+            result.plain = true;
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--")) return error.UnknownOption;
 
         if (command_seen) return error.TooManyCommands;
@@ -75,7 +80,7 @@ pub const help_text =
     \\runmux - lightweight TUI command runner
     \\
     \\Usage:
-    \\  runmux run [--config runmux.json] [--profile dev]
+    \\  runmux run [--config runmux.json] [--profile dev] [--plain]
     \\  runmux check [--config runmux.json] [--profile dev]
     \\  runmux init [--config runmux.json]
     \\  runmux list [--config runmux.json] [--profile dev]
@@ -102,4 +107,11 @@ test "parse command and options" {
     try std.testing.expectEqual(Command.list, opts.command);
     try std.testing.expectEqualStrings("x.json", opts.config_path);
     try std.testing.expectEqualStrings("dev", opts.profile_name.?);
+}
+
+test "parse plain run option" {
+    const args = [_][:0]const u8{ "runmux", "run", "--plain" };
+    const opts = try parse(&args);
+    try std.testing.expectEqual(Command.run, opts.command);
+    try std.testing.expect(opts.plain);
 }

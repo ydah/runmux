@@ -244,12 +244,19 @@ pub const Supervisor = struct {
         for (self.processes) |*process| process.runner.join(self.io);
     }
 
-    fn hasActiveProcess(self: *const Supervisor) bool {
+    pub fn hasActiveProcess(self: *const Supervisor) bool {
         for (self.processes) |process| {
             switch (process.status) {
                 .running, .starting, .stopping, .restarting => return true,
                 else => {},
             }
+        }
+        return false;
+    }
+
+    pub fn hasFailedProcess(self: *const Supervisor) bool {
+        for (self.processes) |process| {
+            if (process.status == .failed) return true;
         }
         return false;
     }
