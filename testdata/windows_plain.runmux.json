@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "stdout-demo",
+          "argv": ["cmd.exe", "/C", "echo out"]
+        },
+        {
+          "name": "stderr-demo",
+          "argv": ["cmd.exe", "/C", "echo err 1>&2"]
+        }
+      ]
+    }
+  ]
+}

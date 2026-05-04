@@ -13,12 +13,16 @@ jobs:
   build-and-test:
     name: Zig 0.16.0 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         os:
           - ubuntu-latest
           - macos-latest
+          - windows-latest
 
     steps:
       - name: Checkout
@@ -44,12 +48,17 @@ jobs:
       - name: Smoke test CLI
         run: |
           set -euo pipefail
-          zig-out/bin/runmux --version
-          zig-out/bin/runmux --help
-          zig-out/bin/runmux check --config runmux.example.json
-          zig-out/bin/runmux list --config runmux.example.json
+          exe="zig-out/bin/runmux"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            exe="zig-out/bin/runmux.exe"
+          fi
+          "$exe" --version
+          "$exe" --help
+          "$exe" check --config runmux.example.json
+          "$exe" list --config runmux.example.json
 
       - name: Smoke test plain mode
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           log_dir="$(mktemp -d)"
@@ -61,6 +70,7 @@ jobs:
           grep -F "[stderr-demo:stderr] err" "$log_dir/stderr-demo.log"
 
       - name: Smoke test critical failure
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           set +e
@@ -70,6 +80,7 @@ jobs:
           test "$status" -eq 4
 
       - name: Smoke test dependency wait
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           output="$(zig-out/bin/runmux run --plain --config testdata/dependency.runmux.json 2>&1)"
@@ -79,6 +90,7 @@ jobs:
           grep -F "[app:stdout] app" <<<"$output"
 
       - name: Smoke test health check
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           output="$(zig-out/bin/runmux run --plain --config testdata/health.runmux.json 2>&1)"
@@ -87,6 +99,7 @@ jobs:
           grep -F "[app:stdout] app" <<<"$output"
 
       - name: Smoke test TOML config
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           zig-out/bin/runmux check --config testdata/toml.runmux.toml
@@ -96,11 +109,27 @@ jobs:
           grep -F "[app:system] waiting for dependencies" <<<"$output"
           grep -F "[app:stdout] toml app" <<<"$output"
 
+      - name: Smoke test Windows plain mode
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          log_dir="$(mktemp -d)"
+          output="$(zig-out/bin/runmux.exe run --plain --config testdata/windows_plain.runmux.json --log-dir "$log_dir" 2>&1)"
+          printf '%s\n' "$output"
+          grep -F "[stdout-demo:stdout] out" <<<"$output"
+          grep -F "[stderr-demo:stderr] err" <<<"$output"
+          grep -F "[stdout-demo:stdout] out" "$log_dir/stdout-demo.log"
+          grep -F "[stderr-demo:stderr] err" "$log_dir/stderr-demo.log"
+
       - name: Smoke test invalid config
         run: |
           set -euo pipefail
           set +e
-          zig-out/bin/runmux check --config testdata/invalid_cmd_and_argv.runmux.json
+          exe="zig-out/bin/runmux"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            exe="zig-out/bin/runmux.exe"
+          fi
+          "$exe" check --config testdata/invalid_cmd_and_argv.runmux.json
           status=$?
           set -e
           test "$status" -eq 2
