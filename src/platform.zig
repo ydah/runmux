@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 pub fn shellArgv(allocator: std.mem.Allocator, cmd: []const u8, shell_path: []const u8) ![]const []const u8 {
     if (builtin.os.tag == .windows) {
         var argv = try allocator.alloc([]const u8, 3);
-        argv[0] = "cmd.exe";
+        argv[0] = shell_path;
         argv[1] = "/C";
         argv[2] = cmd;
         return argv;
@@ -15,6 +15,13 @@ pub fn shellArgv(allocator: std.mem.Allocator, cmd: []const u8, shell_path: []co
     argv[1] = "-lc";
     argv[2] = cmd;
     return argv;
+}
+
+pub fn shellPath(parent_env: *const std.process.Environ.Map) []const u8 {
+    return switch (builtin.os.tag) {
+        .windows => parent_env.get("COMSPEC") orelse "cmd.exe",
+        else => parent_env.get("SHELL") orelse "/bin/sh",
+    };
 }
 
 pub fn directArgv(allocator: std.mem.Allocator, cmd: []const u8) ![]const []const u8 {

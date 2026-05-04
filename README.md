@@ -106,7 +106,7 @@ q or Ctrl+C     stop children and quit
 
 ## Limitations
 
-- POSIX is the primary MVP target. Windows behavior is separated but not complete.
+- POSIX is the primary target. Windows uses `COMSPEC` for shell commands, but process-tree cleanup is still incomplete.
 - This is not a pseudo-terminal multiplexer; interactive child stdin is not forwarded.
 - Child process stdout/stderr are piped into the TUI, so programs that require a real TTY may behave differently.
 - ANSI escape sequences are stripped for display safety.

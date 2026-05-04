@@ -672,7 +672,7 @@ pub const Supervisor = struct {
         }
 
         const argv = if (health.cmd) |cmd|
-            try platform.shellArgv(self.allocator, cmd, self.parent_env.get("SHELL") orelse "/bin/sh")
+            try platform.shellArgv(self.allocator, cmd, platform.shellPath(self.parent_env))
         else
             health.argv;
         defer if (health.cmd != null) self.allocator.free(argv);

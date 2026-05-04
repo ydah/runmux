@@ -39,7 +39,7 @@ pub const ProcessRunner = struct {
 
         const argv = if (spec.cmd) |cmd|
             if (spec.shell)
-                try platform.shellArgv(self.allocator, cmd, parent_env.get("SHELL") orelse "/bin/sh")
+                try platform.shellArgv(self.allocator, cmd, platform.shellPath(parent_env))
             else
                 try platform.directArgv(self.allocator, cmd)
         else
