@@ -21,19 +21,18 @@ pub const LineAssembler = struct {
     pub fn push(self: *LineAssembler, bytes: []const u8, lines: *std.ArrayList([]u8)) !void {
         for (bytes) |byte| {
             if (byte == '\n') {
-                if (self.previous_was_cr) {
-                    self.previous_was_cr = false;
-                    continue;
-                }
                 try self.emit(lines);
+                self.previous_was_cr = false;
                 continue;
             }
             if (byte == '\r') {
-                try self.emit(lines);
                 self.previous_was_cr = true;
                 continue;
             }
 
+            if (self.previous_was_cr) {
+                self.pending.clearRetainingCapacity();
+            }
             self.previous_was_cr = false;
             try self.pending.append(self.allocator, byte);
             if (self.pending.items.len >= self.max_pending) {
@@ -89,6 +88,20 @@ test "line_assembler_handles_crlf" {
     try std.testing.expectEqual(@as(usize, 2), lines.items.len);
     try std.testing.expectEqualStrings("a", lines.items[0]);
     try std.testing.expectEqualStrings("b", lines.items[1]);
+}
+
+test "line_assembler_keeps_last_carriage_return_update" {
+    var assembler = LineAssembler.init(std.testing.allocator, 1024);
+    defer assembler.deinit();
+    var lines: std.ArrayList([]u8) = .empty;
+    defer {
+        freeLines(std.testing.allocator, lines.items);
+        lines.deinit(std.testing.allocator);
+    }
+
+    try assembler.push("10%\r20%\r30%\n", &lines);
+    try std.testing.expectEqual(@as(usize, 1), lines.items.len);
+    try std.testing.expectEqualStrings("30%", lines.items[0]);
 }
 
 test "line_assembler_keeps_partial_line" {

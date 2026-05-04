@@ -407,17 +407,27 @@ fn applySgr(params: []const u8, base_style: vaxis.Style, style: *vaxis.Style) vo
         return;
     }
 
+    var codes: [32]u16 = undefined;
+    var code_count: usize = 0;
     var index: usize = 0;
     while (index <= params.len) {
         const end = std.mem.indexOfScalarPos(u8, params, index, ';') orelse params.len;
-        const code = if (end == index) 0 else std.fmt.parseInt(u16, params[index..end], 10) catch 0;
-        applySgrCode(code, base_style, style);
+        if (code_count >= codes.len) break;
+        codes[code_count] = if (end == index) 0 else std.fmt.parseInt(u16, params[index..end], 10) catch 0;
+        code_count += 1;
         if (end == params.len) break;
         index = end + 1;
     }
+
+    index = 0;
+    while (index < code_count) {
+        const consumed = applySgrCode(codes[0..code_count], index, base_style, style);
+        index += if (consumed == 0) 1 else consumed;
+    }
 }
 
-fn applySgrCode(code: u16, base_style: vaxis.Style, style: *vaxis.Style) void {
+fn applySgrCode(codes: []const u16, index: usize, base_style: vaxis.Style, style: *vaxis.Style) usize {
+    const code = codes[index];
     switch (code) {
         0 => style.* = base_style,
         1 => style.bold = true,
@@ -438,7 +448,45 @@ fn applySgrCode(code: u16, base_style: vaxis.Style, style: *vaxis.Style) void {
         49 => style.bg = .default,
         90...97 => style.fg = .{ .index = @intCast((code - 90) + 8) },
         100...107 => style.bg = .{ .index = @intCast((code - 100) + 8) },
+        38, 48 => return applyExtendedColor(codes, index, code == 38, style),
         else => {},
+    }
+    return 1;
+}
+
+fn applyExtendedColor(codes: []const u16, index: usize, foreground: bool, style: *vaxis.Style) usize {
+    if (index + 2 >= codes.len) return 1;
+    switch (codes[index + 1]) {
+        5 => {
+            const color: vaxis.Color = .{ .index = @intCast(@min(codes[index + 2], 255)) };
+            if (foreground) style.fg = color else style.bg = color;
+            return 3;
+        },
+        2 => {
+            if (index + 4 >= codes.len) return 1;
+            const color: vaxis.Color = .{ .rgb = .{
+                @intCast(@min(codes[index + 2], 255)),
+                @intCast(@min(codes[index + 3], 255)),
+                @intCast(@min(codes[index + 4], 255)),
+            } };
+            if (foreground) style.fg = color else style.bg = color;
+            return 5;
+        },
+        else => return 1,
+    }
+}
+
+test "ui_apply_sgr_extended_colors" {
+    var style: vaxis.Style = .{};
+    applySgr("38;5;196;48;2;1;2;3", .{}, &style);
+
+    switch (style.fg) {
+        .index => |value| try std.testing.expectEqual(@as(u8, 196), value),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (style.bg) {
+        .rgb => |value| try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, &value),
+        else => return error.TestUnexpectedResult,
     }
 }
 
