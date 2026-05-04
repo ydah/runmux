@@ -15,6 +15,12 @@ pub const RestartSpec = struct {
     delay_ms: u32 = 1000,
 };
 
+pub const DependencyFailurePolicy = enum {
+    ignore,
+    stop,
+    restart,
+};
+
 pub const LogSpec = struct {
     max_lines: u32 = 2000,
     strip_ansi: bool = true,
@@ -38,6 +44,7 @@ pub const ProcessSpec = struct {
     cmd: ?[]const u8,
     argv: []const []const u8,
     depends_on: []const []const u8,
+    dependency_failure: DependencyFailurePolicy,
     cwd: []const u8,
     env: []const EnvVar,
     shell: bool,
@@ -84,6 +91,7 @@ const RawDefaults = struct {
     cwd: ?[]const u8 = null,
     shell: ?bool = null,
     autostart: ?bool = null,
+    dependency_failure: ?[]const u8 = null,
     restart: ?RawRestartSpec = null,
     log: ?RawLogSpec = null,
 };
@@ -98,6 +106,7 @@ const RawProcessSpec = struct {
     cmd: ?[]const u8 = null,
     argv: ?[]const []const u8 = null,
     depends_on: ?[]const []const u8 = null,
+    dependency_failure: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
     env: ?std.json.Value = null,
     shell: ?bool = null,
@@ -274,6 +283,7 @@ const Defaults = struct {
     cwd: []const u8 = ".",
     shell: bool = true,
     autostart: bool = true,
+    dependency_failure: DependencyFailurePolicy = .ignore,
     restart: RestartSpec = .{},
     log: LogSpec = .{},
 };
@@ -284,6 +294,7 @@ fn applyDefaults(raw: ?RawDefaults) Defaults {
         if (r.cwd) |cwd| defaults.cwd = cwd;
         if (r.shell) |shell| defaults.shell = shell;
         if (r.autostart) |autostart| defaults.autostart = autostart;
+        if (r.dependency_failure) |policy| defaults.dependency_failure = parseDependencyFailurePolicy(policy) catch defaults.dependency_failure;
         if (r.restart) |restart| defaults.restart = mergeRestart(defaults.restart, restart) catch defaults.restart;
         if (r.log) |log| defaults.log = mergeLog(defaults.log, log);
     }
@@ -384,6 +395,16 @@ fn resolveProcess(
     const health = try resolveHealth(allocator, profile_name, raw.name, raw.health, diagnostics);
     errdefer freeHealth(allocator, health);
 
+    const dependency_failure = if (raw.dependency_failure) |policy|
+        parseDependencyFailurePolicy(policy) catch {
+            return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": invalid dependency_failure policy", .{
+                profile_name,
+                raw.name,
+            });
+        }
+    else
+        defaults.dependency_failure;
+
     const env = try resolveEnv(allocator, profile_name, raw.name, raw.env, diagnostics);
     errdefer allocator.free(env);
 
@@ -404,6 +425,7 @@ fn resolveProcess(
         .cmd = raw.cmd,
         .argv = argv,
         .depends_on = depends_on,
+        .dependency_failure = dependency_failure,
         .cwd = cwd,
         .env = env,
         .shell = shell,
@@ -645,6 +667,13 @@ fn parseRestartPolicy(value: []const u8) !RestartPolicy {
     return error.InvalidRestartPolicy;
 }
 
+fn parseDependencyFailurePolicy(value: []const u8) !DependencyFailurePolicy {
+    if (std.mem.eql(u8, value, "ignore")) return .ignore;
+    if (std.mem.eql(u8, value, "stop")) return .stop;
+    if (std.mem.eql(u8, value, "restart")) return .restart;
+    return error.InvalidDependencyFailurePolicy;
+}
+
 fn findProfile(profiles: []RawProfile, name: []const u8) ?RawProfile {
     for (profiles) |profile| {
         if (std.mem.eql(u8, profile.name, name)) return profile;
@@ -690,6 +719,7 @@ pub const sample_config =
     \\          "name": "manual",
     \\          "cmd": "echo manual process; sleep 5",
     \\          "depends_on": ["clock"],
+    \\          "dependency_failure": "ignore",
     \\          "health": {
     \\            "argv": ["/bin/sh", "-c", "exit 0"],
     \\            "interval_ms": 1000,
@@ -776,6 +806,31 @@ test "config_resolves_dependencies" {
     defer loaded.deinit();
 
     try std.testing.expectEqualStrings("db", loaded.profile.processes[1].depends_on[0]);
+    try std.testing.expectEqual(DependencyFailurePolicy.ignore, loaded.profile.processes[1].dependency_failure);
+}
+
+test "config_resolves_dependency_failure_policy" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"db","cmd":"echo db"},{"name":"api","cmd":"echo api","depends_on":["db"],"dependency_failure":"restart"}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    var loaded = try parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics);
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(DependencyFailurePolicy.restart, loaded.profile.processes[1].dependency_failure);
+}
+
+test "config_rejects_invalid_dependency_failure_policy" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"db","cmd":"echo db"},{"name":"api","cmd":"echo api","depends_on":["db"],"dependency_failure":"bad"}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "dependency_failure") != null);
 }
 
 test "config_rejects_unknown_dependency" {
@@ -870,6 +925,7 @@ test "config_resolves_toml" {
         \\name = "api"
         \\argv = ["/bin/sh", "-c", "echo api"]
         \\depends_on = ["db"]
+        \\dependency_failure = "stop"
         \\critical = true
         \\
         \\[profiles.processes.health]
@@ -887,6 +943,7 @@ test "config_resolves_toml" {
     try std.testing.expectEqualStrings("dev", loaded.profile.name);
     try std.testing.expectEqual(@as(usize, 2), loaded.profile.processes.len);
     try std.testing.expectEqualStrings("db", loaded.profile.processes[1].depends_on[0]);
+    try std.testing.expectEqual(DependencyFailurePolicy.stop, loaded.profile.processes[1].dependency_failure);
     try std.testing.expect(loaded.profile.processes[1].critical);
     try std.testing.expectEqual(@as(u32, 10), loaded.profile.processes[1].health.?.interval_ms);
     try std.testing.expectEqual(@as(u32, 100), loaded.profile.processes[1].health.?.timeout_ms);

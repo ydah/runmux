@@ -67,6 +67,7 @@ const ProcessBuilder = struct {
     argv: std.ArrayList([]const u8) = .empty,
     depends_on_set: bool = false,
     depends_on: std.ArrayList([]const u8) = .empty,
+    dependency_failure: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
     env: std.ArrayList(EnvPair) = .empty,
     shell: ?bool = null,
@@ -86,11 +87,12 @@ const DefaultsBuilder = struct {
     cwd: ?[]const u8 = null,
     shell: ?bool = null,
     autostart: ?bool = null,
+    dependency_failure: ?[]const u8 = null,
     restart: RestartBuilder = .{},
     log: LogBuilder = .{},
 
     fn hasAny(self: DefaultsBuilder) bool {
-        return self.cwd != null or self.shell != null or self.autostart != null or self.restart.hasAny() or self.log.hasAny();
+        return self.cwd != null or self.shell != null or self.autostart != null or self.dependency_failure != null or self.restart.hasAny() or self.log.hasAny();
     }
 };
 
@@ -239,6 +241,10 @@ const Parser = struct {
             self.config.defaults.autostart = try expectBool(value);
             return;
         }
+        if (std.mem.eql(u8, key, "dependency_failure")) {
+            self.config.defaults.dependency_failure = try expectString(value);
+            return;
+        }
         return error.InvalidToml;
     }
 
@@ -271,6 +277,10 @@ const Parser = struct {
             process.depends_on_set = true;
             process.depends_on.clearRetainingCapacity();
             for (try expectStringArray(value)) |item| try process.depends_on.append(self.allocator, item);
+            return;
+        }
+        if (std.mem.eql(u8, key, "dependency_failure")) {
+            process.dependency_failure = try expectString(value);
             return;
         }
         if (std.mem.eql(u8, key, "cwd")) {
@@ -568,6 +578,7 @@ fn writeDefaultsJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), defa
     if (defaults.cwd) |cwd| try writeStringField(allocator, out, &first, "cwd", cwd);
     if (defaults.shell) |shell| try writeBoolField(allocator, out, &first, "shell", shell);
     if (defaults.autostart) |autostart| try writeBoolField(allocator, out, &first, "autostart", autostart);
+    if (defaults.dependency_failure) |policy| try writeStringField(allocator, out, &first, "dependency_failure", policy);
     if (defaults.restart.hasAny()) {
         try beginField(allocator, out, &first, "restart");
         try writeRestartJson(allocator, out, defaults.restart);
@@ -600,6 +611,7 @@ fn writeProcessJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), proce
     if (process.cmd) |cmd| try writeStringField(allocator, out, &first, "cmd", cmd);
     if (process.argv_set) try writeStringArrayField(allocator, out, &first, "argv", process.argv.items);
     if (process.depends_on_set) try writeStringArrayField(allocator, out, &first, "depends_on", process.depends_on.items);
+    if (process.dependency_failure) |policy| try writeStringField(allocator, out, &first, "dependency_failure", policy);
     if (process.cwd) |cwd| try writeStringField(allocator, out, &first, "cwd", cwd);
     if (process.env.items.len > 0) {
         try beginField(allocator, out, &first, "env");
@@ -780,6 +792,7 @@ test "toml_config_converts_runmux_schema_to_json" {
         \\name = "api"
         \\argv = ["/bin/sh", "-c", "echo api"]
         \\depends_on = ["db"]
+        \\dependency_failure = "restart"
         \\critical = true
         \\
         \\[profiles.processes.health]
@@ -793,5 +806,6 @@ test "toml_config_converts_runmux_schema_to_json" {
     defer std.testing.allocator.free(json);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"default_profile\":\"dev\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"depends_on\":[\"db\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"dependency_failure\":\"restart\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"PORT\":\"5432\"") != null);
 }

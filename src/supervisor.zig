@@ -572,6 +572,7 @@ pub const Supervisor = struct {
         }
 
         process.status = if (failed) .failed else .exited;
+        if (failed) self.handleDependencyFailure(process);
         if (failed and self.handleCriticalFailure(process)) return;
         self.scheduleRestart(process, failed);
     }
@@ -652,6 +653,52 @@ pub const Supervisor = struct {
             }
         }
         return true;
+    }
+
+    fn handleDependencyFailure(self: *Supervisor, dependency: *RuntimeProcess) void {
+        for (self.processes) |*process| {
+            if (process.id == dependency.id or !dependsOn(process, dependency.spec.name)) continue;
+            switch (process.spec.dependency_failure) {
+                .ignore => {},
+                .stop => self.stopForDependencyFailure(process, dependency),
+                .restart => self.restartForDependencyFailure(process, dependency),
+            }
+        }
+    }
+
+    fn stopForDependencyFailure(self: *Supervisor, process: *RuntimeProcess, dependency: *const RuntimeProcess) void {
+        switch (process.status) {
+            .running, .starting => {
+                self.appendSystem(process, "dependency {s} failed; stopping", .{dependency.spec.name}) catch {};
+                self.stopProcess(process);
+            },
+            .pending, .restarting => {
+                process.start_when_dependencies_ready = false;
+                process.pending_manual_restart = false;
+                process.restart_due_ms = null;
+                process.status = .exited;
+                self.appendSystem(process, "dependency {s} failed; start canceled", .{dependency.spec.name}) catch {};
+            },
+            else => {},
+        }
+    }
+
+    fn restartForDependencyFailure(self: *Supervisor, process: *RuntimeProcess, dependency: *const RuntimeProcess) void {
+        switch (process.status) {
+            .running, .starting => {
+                process.pending_manual_restart = true;
+                self.appendSystem(process, "dependency {s} failed; restarting when ready", .{dependency.spec.name}) catch {};
+                self.stopProcess(process);
+            },
+            .pending, .restarting => {
+                process.status = .pending;
+                process.start_when_dependencies_ready = true;
+                process.pending_manual_restart = false;
+                process.restart_due_ms = null;
+                self.appendSystem(process, "dependency {s} failed; waiting for dependencies", .{dependency.spec.name}) catch {};
+            },
+            else => {},
+        }
     }
 
     fn startHealthCheck(self: *Supervisor, process: *RuntimeProcess, now: i64) void {
@@ -800,6 +847,13 @@ pub const Supervisor = struct {
         process.last_error = if (message) |text| self.allocator.dupe(u8, text) catch null else null;
     }
 };
+
+fn dependsOn(process: *const RuntimeProcess, dependency_name: []const u8) bool {
+    for (process.spec.depends_on) |candidate| {
+        if (std.mem.eql(u8, candidate, dependency_name)) return true;
+    }
+    return false;
+}
 
 const HealthThreadContext = struct {
     allocator: std.mem.Allocator,

@@ -89,6 +89,19 @@ jobs:
           grep -F "[app:system] waiting for dependencies" <<<"$output"
           grep -F "[app:stdout] app" <<<"$output"
 
+      - name: Smoke test dependency failure policy
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(zig-out/bin/runmux run --plain --config testdata/dependency_failure.runmux.json 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 4
+          grep -F "[app:system] dependency db failed; restarting when ready" <<<"$output"
+          grep -F "[app:system] waiting for dependencies" <<<"$output"
+
       - name: Smoke test health check
         if: runner.os != 'Windows'
         run: |

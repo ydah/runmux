@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "db",
+          "argv": ["/bin/sh", "-c", "sleep 0.1; exit 3"]
+        },
+        {
+          "name": "app",
+          "argv": ["/bin/sh", "-c", "sleep 2"],
+          "depends_on": ["db"],
+          "dependency_failure": "restart"
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ name = "dev"
 name = "app"
 argv = ["/bin/sh", "-c", "printf 'toml app\n'"]
 depends_on = ["setup"]
+dependency_failure = "restart"
 
 [[profiles.processes]]
 name = "setup"
