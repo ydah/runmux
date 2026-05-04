@@ -1,0 +1,23 @@
+version = 1
+default_profile = "dev"
+
+[defaults]
+cwd = "."
+autostart = true
+
+[[profiles]]
+name = "dev"
+
+[[profiles.processes]]
+name = "app"
+argv = ["/bin/sh", "-c", "printf 'toml app\n'"]
+depends_on = ["setup"]
+
+[[profiles.processes]]
+name = "setup"
+argv = ["/bin/sh", "-c", "sleep 0.1; printf 'ready\n'"]
+
+[profiles.processes.health]
+argv = ["/bin/sh", "-c", "exit 0"]
+interval_ms = 10
+retries = 2

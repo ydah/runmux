@@ -30,11 +30,11 @@ runmux --help
 runmux --version
 ```
 
-`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process. Use `--exit-on-critical-failure` to stop the run when a `critical` process fails. Use `--theme` to select `dark`, `light`, or `mono` TUI colors.
+`check` validates the JSON or TOML config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process. Use `--exit-on-critical-failure` to stop the run when a `critical` process fails. Use `--theme` to select `dark`, `light`, or `mono` TUI colors.
 
 ## Config File
 
-The default config file is `runmux.json`.
+The default config file is `runmux.json`. Files ending in `.toml` are accepted with the same schema.
 
 ```json
 {
@@ -85,6 +85,45 @@ The default config file is `runmux.json`.
 
 Each process must set exactly one of `cmd` or `argv`. `cmd` runs through the shell by default. If `shell` is set to `false`, `cmd` must be a single executable path with no arguments; use `argv` for direct execution with arguments. Set `depends_on` to delay a process until dependencies are ready. A dependency is ready when it is running with no health check, has passed its health check, or has exited successfully.
 
+Equivalent TOML:
+
+```toml
+version = 1
+default_profile = "dev"
+
+[defaults]
+cwd = "."
+shell = true
+autostart = true
+
+[defaults.restart]
+policy = "never"
+max_restarts = 0
+delay_ms = 1000
+
+[defaults.log]
+max_lines = 1000
+strip_ansi = true
+
+[[profiles]]
+name = "dev"
+
+[[profiles.processes]]
+name = "clock"
+cmd = "while true; do date; sleep 1; done"
+
+[[profiles.processes]]
+name = "manual"
+cmd = "echo manual process; sleep 5"
+depends_on = ["clock"]
+autostart = false
+
+[profiles.processes.health]
+argv = ["/bin/sh", "-c", "exit 0"]
+interval_ms = 1000
+retries = 3
+```
+
 ## TUI Keys
 
 ```text
@@ -106,11 +145,11 @@ q or Ctrl+C     stop children and quit
 
 ## Limitations
 
-- POSIX is the primary target. Windows uses `COMSPEC` for shell commands, but process-tree cleanup is still incomplete.
+- POSIX is the primary target. Windows uses `COMSPEC` for shell commands and can terminate direct child processes, but process-tree cleanup is still incomplete.
 - This is not a pseudo-terminal multiplexer; interactive child stdin is not forwarded.
 - Child process stdout/stderr are piped into the TUI, so programs that require a real TTY may behave differently.
 - ANSI escape sequences are stripped by default. If `log.strip_ansi` is `false`, basic SGR color/style codes are rendered safely and other escape sequences are dropped.
-- POSIX child processes are started in a dedicated process group so stop/kill targets their process tree. Windows process-tree cleanup is still incomplete.
+- POSIX child processes are started in a dedicated process group so stop/kill targets their process tree. Windows process-tree cleanup beyond direct children is still incomplete.
 - Unicode width handling is delegated to libvaxis, but complex logs can still render imperfectly in some terminals.
 
 ## Development

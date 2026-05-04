@@ -86,6 +86,16 @@ jobs:
           grep -F "[db:system] health ok" <<<"$output"
           grep -F "[app:stdout] app" <<<"$output"
 
+      - name: Smoke test TOML config
+        run: |
+          set -euo pipefail
+          zig-out/bin/runmux check --config testdata/toml.runmux.toml
+          output="$(zig-out/bin/runmux run --plain --config testdata/toml.runmux.toml 2>&1)"
+          printf '%s\n' "$output"
+          grep -F "[setup:stdout] ready" <<<"$output"
+          grep -F "[app:system] waiting for dependencies" <<<"$output"
+          grep -F "[app:stdout] toml app" <<<"$output"
+
       - name: Smoke test invalid config
         run: |
           set -euo pipefail

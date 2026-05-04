@@ -9,6 +9,7 @@ pub const plain = @import("plain.zig");
 pub const process_runner = @import("process_runner.zig");
 pub const ring_buffer = @import("ring_buffer.zig");
 pub const supervisor = @import("supervisor.zig");
+pub const toml_config = @import("toml_config.zig");
 pub const ui = @import("ui.zig");
 
 test {
@@ -23,5 +24,6 @@ test {
     _ = process_runner;
     _ = ring_buffer;
     _ = supervisor;
+    _ = toml_config;
     _ = ui;
 }

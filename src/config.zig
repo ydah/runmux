@@ -1,4 +1,5 @@
 const std = @import("std");
+const toml_config = @import("toml_config.zig");
 
 pub const ConfigError = error{ConfigInvalid};
 
@@ -152,7 +153,24 @@ pub fn loadAndResolveFile(
         return diagnostics.fail("config error: unable to read {s}: {s}", .{ path, @errorName(err) });
     };
     defer allocator.free(bytes);
+    if (isTomlPath(path)) {
+        return parseAndResolveTomlString(allocator, io, bytes, profile_name, diagnostics);
+    }
     return parseAndResolveString(allocator, io, bytes, profile_name, diagnostics);
+}
+
+pub fn parseAndResolveTomlString(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    bytes: []const u8,
+    profile_name: ?[]const u8,
+    diagnostics: *Diagnostics,
+) !LoadedConfig {
+    const json_bytes = toml_config.toJson(allocator, bytes) catch |err| {
+        return diagnostics.fail("config error: invalid TOML: {s}", .{@errorName(err)});
+    };
+    defer allocator.free(json_bytes);
+    return parseAndResolveString(allocator, io, json_bytes, profile_name, diagnostics);
 }
 
 pub fn parseAndResolveString(
@@ -624,6 +642,10 @@ fn findProfile(profiles: []RawProfile, name: []const u8) ?RawProfile {
     return null;
 }
 
+fn isTomlPath(path: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.fs.path.extension(path), ".toml");
+}
+
 pub const sample_config =
     \\{
     \\  "version": 1,
@@ -803,4 +825,44 @@ test "config_rejects_shell_false_cmd_with_whitespace" {
     defer diagnostics.deinit();
     try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
     try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "shell=false") != null);
+}
+
+test "config_resolves_toml" {
+    const data =
+        \\version = 1
+        \\default_profile = "dev"
+        \\
+        \\[defaults]
+        \\cwd = "."
+        \\autostart = true
+        \\
+        \\[[profiles]]
+        \\name = "dev"
+        \\
+        \\[[profiles.processes]]
+        \\name = "db"
+        \\cmd = "echo db"
+        \\
+        \\[[profiles.processes]]
+        \\name = "api"
+        \\argv = ["/bin/sh", "-c", "echo api"]
+        \\depends_on = ["db"]
+        \\critical = true
+        \\
+        \\[profiles.processes.health]
+        \\argv = ["/bin/sh", "-c", "exit 0"]
+        \\interval_ms = 10
+        \\retries = 2
+    ;
+
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    var loaded = try parseAndResolveTomlString(std.testing.allocator, std.testing.io, data, null, &diagnostics);
+    defer loaded.deinit();
+
+    try std.testing.expectEqualStrings("dev", loaded.profile.name);
+    try std.testing.expectEqual(@as(usize, 2), loaded.profile.processes.len);
+    try std.testing.expectEqualStrings("db", loaded.profile.processes[1].depends_on[0]);
+    try std.testing.expect(loaded.profile.processes[1].critical);
+    try std.testing.expectEqual(@as(u32, 10), loaded.profile.processes[1].health.?.interval_ms);
 }
