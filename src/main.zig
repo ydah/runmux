@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
         .init => try commandInit(io, parsed.config_path),
         .check => try commandCheck(allocator, io, parsed.config_path, parsed.profile_name),
         .list => try commandList(allocator, io, parsed.config_path, parsed.profile_name),
-        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain, parsed.log_dir, parsed.exit_on_critical_failure),
+        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain, parsed.log_dir, parsed.exit_on_critical_failure, parsed.theme_name),
     }
 }
 
@@ -106,6 +106,7 @@ fn commandRun(
     plain: bool,
     log_dir: ?[]const u8,
     exit_on_critical_failure: bool,
+    theme_name: ?[]const u8,
 ) !void {
     var diagnostics = config.Diagnostics.init(allocator);
     defer diagnostics.deinit();
@@ -119,6 +120,10 @@ fn commandRun(
     const run_options: runmux.supervisor.Options = .{
         .log_dir = log_dir,
         .exit_on_critical_failure = exit_on_critical_failure,
+        .theme = parseTheme(theme_name) catch |err| {
+            try printErr(io, "error: {s}\n", .{@errorName(err)});
+            std.process.exit(2);
+        },
     };
 
     if (plain) {
@@ -138,6 +143,14 @@ fn commandRun(
         try printErr(io, "error: TUI failed: {s}\n", .{@errorName(err)});
         std.process.exit(3);
     };
+}
+
+fn parseTheme(theme_name: ?[]const u8) !runmux.supervisor.Theme {
+    const name = theme_name orelse return .dark;
+    if (std.mem.eql(u8, name, "dark")) return .dark;
+    if (std.mem.eql(u8, name, "light")) return .light;
+    if (std.mem.eql(u8, name, "mono")) return .mono;
+    return error.InvalidTheme;
 }
 
 fn printDiagnostics(io: std.Io, err: anyerror, diagnostics: *const config.Diagnostics) !void {

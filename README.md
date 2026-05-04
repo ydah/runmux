@@ -22,7 +22,7 @@ zig build run -- run
 ## Commands
 
 ```sh
-runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure]
+runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure] [--theme dark|light|mono]
 runmux check [--config runmux.json] [--profile dev]
 runmux init [--config runmux.json]
 runmux list [--config runmux.json] [--profile dev]
@@ -30,7 +30,7 @@ runmux --help
 runmux --version
 ```
 
-`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process. Use `--exit-on-critical-failure` to stop the run when a `critical` process fails.
+`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process. Use `--exit-on-critical-failure` to stop the run when a `critical` process fails. Use `--theme` to select `dark`, `light`, or `mono` TUI colors.
 
 ## Config File
 

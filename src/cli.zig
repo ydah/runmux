@@ -19,6 +19,7 @@ pub const Options = struct {
     plain: bool = false,
     log_dir: ?[]const u8 = null,
     exit_on_critical_failure: bool = false,
+    theme_name: ?[]const u8 = null,
 };
 
 pub const ParseError = error{
@@ -70,6 +71,12 @@ pub fn parse(args: []const [:0]const u8) ParseError!Options {
             result.exit_on_critical_failure = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--theme")) {
+            index += 1;
+            if (index >= args.len) return error.MissingValue;
+            result.theme_name = args[index];
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--")) return error.UnknownOption;
 
         if (command_seen) return error.TooManyCommands;
@@ -92,7 +99,7 @@ pub const help_text =
     \\runmux - lightweight TUI command runner
     \\
     \\Usage:
-    \\  runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure]
+    \\  runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure] [--theme dark|light|mono]
     \\  runmux check [--config runmux.json] [--profile dev]
     \\  runmux init [--config runmux.json]
     \\  runmux list [--config runmux.json] [--profile dev]
@@ -141,4 +148,11 @@ test "parse exit on critical failure option" {
     const opts = try parse(&args);
     try std.testing.expectEqual(Command.run, opts.command);
     try std.testing.expect(opts.exit_on_critical_failure);
+}
+
+test "parse theme option" {
+    const args = [_][:0]const u8{ "runmux", "run", "--theme", "mono" };
+    const opts = try parse(&args);
+    try std.testing.expectEqual(Command.run, opts.command);
+    try std.testing.expectEqualStrings("mono", opts.theme_name.?);
 }

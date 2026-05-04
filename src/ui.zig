@@ -5,6 +5,7 @@ const log_store = @import("log_store.zig");
 const supervisor_mod = @import("supervisor.zig");
 
 const Supervisor = supervisor_mod.Supervisor;
+const Theme = supervisor_mod.Theme;
 
 const VaxisEvent = union(enum) {
     key_press: vaxis.Key,
@@ -167,7 +168,37 @@ fn render(allocator: std.mem.Allocator, vx: *vaxis.Vaxis, supervisor: *Superviso
     try renderHeader(root, allocator, supervisor);
     try renderPanes(root, allocator, supervisor);
     renderFooter(root, supervisor);
-    if (supervisor.show_help) renderHelp(root);
+    if (supervisor.show_help) renderHelp(root, supervisor.options.theme);
+}
+
+const Palette = struct {
+    header: vaxis.Style,
+    footer: vaxis.Style,
+    popup: vaxis.Style,
+    popup_title: vaxis.Style,
+};
+
+fn palette(theme: Theme) Palette {
+    return switch (theme) {
+        .dark => .{
+            .header = .{ .fg = .{ .index = 15 }, .bg = .{ .index = 4 }, .bold = true },
+            .footer = .{ .fg = .{ .index = 15 }, .bg = .{ .index = 8 } },
+            .popup = .{ .fg = .{ .index = 15 }, .bg = .{ .index = 0 } },
+            .popup_title = .{ .fg = .{ .index = 14 }, .bg = .{ .index = 0 }, .bold = true },
+        },
+        .light => .{
+            .header = .{ .fg = .{ .index = 0 }, .bg = .{ .index = 7 }, .bold = true },
+            .footer = .{ .fg = .{ .index = 0 }, .bg = .{ .index = 7 } },
+            .popup = .{ .fg = .{ .index = 0 }, .bg = .{ .index = 15 } },
+            .popup_title = .{ .fg = .{ .index = 4 }, .bg = .{ .index = 15 }, .bold = true },
+        },
+        .mono => .{
+            .header = .{ .bold = true, .reverse = true },
+            .footer = .{ .reverse = true },
+            .popup = .{},
+            .popup_title = .{ .bold = true },
+        },
+    };
 }
 
 fn renderHeader(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Supervisor) !void {
@@ -182,7 +213,7 @@ fn renderHeader(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *S
         if (supervisor.paused) " | paused" else "",
         filter_text,
     });
-    print(root, 0, 0, text, .{ .fg = .{ .index = 15 }, .bg = .{ .index = 4 }, .bold = true });
+    print(root, 0, 0, text, palette(supervisor.options.theme).header);
 }
 
 fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Supervisor) !void {
@@ -214,7 +245,7 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
             process.restart_count,
             last_text,
         });
-        print(process_window, 0, row, line, if (selected) .{ .reverse = true, .bold = true } else statusStyle(process.status));
+        print(process_window, 0, row, line, if (selected) .{ .reverse = true, .bold = true } else statusStyle(process.status, supervisor.options.theme));
         row += 1;
     }
 
@@ -261,42 +292,26 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
 
 fn renderFooter(root: vaxis.Window, supervisor: *Supervisor) void {
     const row = root.height - 2;
+    const colors = palette(supervisor.options.theme);
     switch (supervisor.input_mode) {
         .search => {
-            print(root, 0, row, " Search: type query, Enter apply, Esc cancel", .{
-                .fg = .{ .index = 15 },
-                .bg = .{ .index = 8 },
-            });
-            print(root, 0, row + 1, supervisor.search_input.items, .{
-                .fg = .{ .index = 15 },
-                .bg = .{ .index = 8 },
-            });
+            print(root, 0, row, " Search: type query, Enter apply, Esc cancel", colors.footer);
+            print(root, 0, row + 1, supervisor.search_input.items, colors.footer);
             return;
         },
         .stdin => {
-            print(root, 0, row, " Send stdin: type one line, Enter send, Esc cancel", .{
-                .fg = .{ .index = 15 },
-                .bg = .{ .index = 8 },
-            });
-            print(root, 0, row + 1, supervisor.search_input.items, .{
-                .fg = .{ .index = 15 },
-                .bg = .{ .index = 8 },
-            });
+            print(root, 0, row, " Send stdin: type one line, Enter send, Esc cancel", colors.footer);
+            print(root, 0, row + 1, supervisor.search_input.items, colors.footer);
             return;
         },
         .none => {},
     }
-    print(root, 0, row, " Up/Down j/k select  Enter start/stop  r restart  a start-all  x stop-all  Tab logs", .{
-        .fg = .{ .index = 15 },
-        .bg = .{ .index = 8 },
-    });
-    print(root, 0, row + 1, " / search  i stdin  s stream-filter  f process-filter  u clear  p pause  ? help  q quit", .{
-        .fg = .{ .index = 15 },
-        .bg = .{ .index = 8 },
-    });
+    print(root, 0, row, " Up/Down j/k select  Enter start/stop  r restart  a start-all  x stop-all  Tab logs", colors.footer);
+    print(root, 0, row + 1, " / search  i stdin  s stream-filter  f process-filter  u clear  p pause  ? help  q quit", colors.footer);
 }
 
-fn renderHelp(root: vaxis.Window) void {
+fn renderHelp(root: vaxis.Window, theme: Theme) void {
+    const colors = palette(theme);
     const width: u16 = @min(root.width - 4, 64);
     const height: u16 = 11;
     const x: i17 = @intCast((root.width - width) / 2);
@@ -306,11 +321,11 @@ fn renderHelp(root: vaxis.Window) void {
         .y_off = y,
         .width = width,
         .height = height,
-        .border = .{ .where = .all, .glyphs = .single_square, .style = .{ .fg = .{ .index = 15 }, .bg = .{ .index = 0 } } },
+        .border = .{ .where = .all, .glyphs = .single_square, .style = colors.popup },
     });
     popup.clear();
-    const style: vaxis.Style = .{ .fg = .{ .index = 15 }, .bg = .{ .index = 0 } };
-    print(popup, 1, 0, "runmux keys", .{ .fg = .{ .index = 14 }, .bg = .{ .index = 0 }, .bold = true });
+    const style: vaxis.Style = colors.popup;
+    print(popup, 1, 0, "runmux keys", colors.popup_title);
     print(popup, 1, 2, "j/k or arrows   select process", style);
     print(popup, 1, 3, "Enter           start or stop selected", style);
     print(popup, 1, 4, "r               restart selected", style);
@@ -342,7 +357,13 @@ fn statusGlyph(status: supervisor_mod.ProcessStatus) []const u8 {
     };
 }
 
-fn statusStyle(status: supervisor_mod.ProcessStatus) vaxis.Style {
+fn statusStyle(status: supervisor_mod.ProcessStatus, theme: Theme) vaxis.Style {
+    if (theme == .mono) {
+        return switch (status) {
+            .running, .failed, .restarting, .starting, .stopping => .{ .bold = true },
+            else => .{},
+        };
+    }
     return switch (status) {
         .running => .{ .fg = .{ .index = 2 }, .bold = true },
         .failed => .{ .fg = .{ .index = 1 }, .bold = true },

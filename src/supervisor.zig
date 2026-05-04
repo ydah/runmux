@@ -36,9 +36,16 @@ pub const HealthStatus = enum {
     unhealthy,
 };
 
+pub const Theme = enum {
+    dark,
+    light,
+    mono,
+};
+
 pub const Options = struct {
     log_dir: ?[]const u8 = null,
     exit_on_critical_failure: bool = false,
+    theme: Theme = .dark,
 };
 
 pub const RuntimeProcess = struct {
