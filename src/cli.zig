@@ -102,8 +102,8 @@ pub const help_text =
     \\TUI keys:
     \\  Up/k, Down/j select   Enter start/stop   r restart
     \\  a start all           x stop all         Tab log mode
-    \\  / search              s/f/u filter       p pause follow
-    \\  ? help                q or Ctrl+C quit
+    \\  / search              i stdin            s/f/u filter
+    \\  p pause follow        ? help             q or Ctrl+C quit
     \\
 ;
 

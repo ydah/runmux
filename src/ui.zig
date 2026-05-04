@@ -65,8 +65,8 @@ pub fn run(
 }
 
 fn handleKey(supervisor: *Supervisor, key: vaxis.Key) void {
-    if (supervisor.input_mode == .search) {
-        handleSearchKey(supervisor, key);
+    if (supervisor.input_mode != .none) {
+        handleTextInputKey(supervisor, key);
         return;
     }
     if (key.matches('q', .{}) or key.matches('c', .{ .ctrl = true })) {
@@ -87,6 +87,10 @@ fn handleKey(supervisor: *Supervisor, key: vaxis.Key) void {
     }
     if (key.matches('u', .{})) {
         supervisor.clearFilters();
+        return;
+    }
+    if (key.matches('i', .{})) {
+        supervisor.beginStdinInput();
         return;
     }
     if (key.codepoint == vaxis.Key.down or key.matches('j', .{})) {
@@ -126,9 +130,13 @@ fn handleKey(supervisor: *Supervisor, key: vaxis.Key) void {
     }
 }
 
-fn handleSearchKey(supervisor: *Supervisor, key: vaxis.Key) void {
+fn handleTextInputKey(supervisor: *Supervisor, key: vaxis.Key) void {
     if (key.codepoint == vaxis.Key.enter) {
-        supervisor.applySearch();
+        switch (supervisor.input_mode) {
+            .search => supervisor.applySearch(),
+            .stdin => supervisor.sendStdinInput(),
+            .none => {},
+        }
         return;
     }
     if (key.codepoint == vaxis.Key.escape) {
@@ -253,22 +261,36 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
 
 fn renderFooter(root: vaxis.Window, supervisor: *Supervisor) void {
     const row = root.height - 2;
-    if (supervisor.input_mode == .search) {
-        print(root, 0, row, " Search: type query, Enter apply, Esc cancel", .{
-            .fg = .{ .index = 15 },
-            .bg = .{ .index = 8 },
-        });
-        print(root, 0, row + 1, supervisor.search_input.items, .{
-            .fg = .{ .index = 15 },
-            .bg = .{ .index = 8 },
-        });
-        return;
+    switch (supervisor.input_mode) {
+        .search => {
+            print(root, 0, row, " Search: type query, Enter apply, Esc cancel", .{
+                .fg = .{ .index = 15 },
+                .bg = .{ .index = 8 },
+            });
+            print(root, 0, row + 1, supervisor.search_input.items, .{
+                .fg = .{ .index = 15 },
+                .bg = .{ .index = 8 },
+            });
+            return;
+        },
+        .stdin => {
+            print(root, 0, row, " Send stdin: type one line, Enter send, Esc cancel", .{
+                .fg = .{ .index = 15 },
+                .bg = .{ .index = 8 },
+            });
+            print(root, 0, row + 1, supervisor.search_input.items, .{
+                .fg = .{ .index = 15 },
+                .bg = .{ .index = 8 },
+            });
+            return;
+        },
+        .none => {},
     }
     print(root, 0, row, " Up/Down j/k select  Enter start/stop  r restart  a start-all  x stop-all  Tab logs", .{
         .fg = .{ .index = 15 },
         .bg = .{ .index = 8 },
     });
-    print(root, 0, row + 1, " / search  s stream-filter  f process-filter  u clear  p pause  ? help  q quit", .{
+    print(root, 0, row + 1, " / search  i stdin  s stream-filter  f process-filter  u clear  p pause  ? help  q quit", .{
         .fg = .{ .index = 15 },
         .bg = .{ .index = 8 },
     });
@@ -295,8 +317,9 @@ fn renderHelp(root: vaxis.Window) void {
     print(popup, 1, 5, "a / x           start all / stop all", style);
     print(popup, 1, 6, "Tab             selected or all logs", style);
     print(popup, 1, 7, "/ s f u         search, stream, process, clear", style);
-    print(popup, 1, 8, "p               pause or resume log follow", style);
-    print(popup, 1, 9, "q or Ctrl+C     quit and stop children", style);
+    print(popup, 1, 8, "i               send one line to selected stdin", style);
+    print(popup, 1, 9, "p               pause or resume log follow", style);
+    print(popup, 1, 10, "q or Ctrl+C     quit and stop children", style);
 }
 
 fn print(window: vaxis.Window, col: u16, row: u16, text: []const u8, style: vaxis.Style) void {
@@ -352,6 +375,10 @@ fn lastResultAlloc(allocator: std.mem.Allocator, process: *const supervisor_mod.
 fn filterSummaryAlloc(allocator: std.mem.Allocator, supervisor: *const Supervisor) ![]const u8 {
     if (supervisor.input_mode == .search) {
         return std.fmt.allocPrint(allocator, " | search: /{s}", .{supervisor.search_input.items});
+    }
+    if (supervisor.input_mode == .stdin) {
+        const selected_name = if (supervisor.processes.len > 0) supervisor.processes[supervisor.selected_index].spec.name else "-";
+        return std.fmt.allocPrint(allocator, " | stdin: {s}", .{selected_name});
     }
 
     var parts: std.ArrayList(u8) = .empty;

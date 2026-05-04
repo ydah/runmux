@@ -26,6 +26,7 @@ pub const LogMode = enum {
 pub const InputMode = enum {
     none,
     search,
+    stdin,
 };
 
 pub const HealthStatus = enum {
@@ -276,6 +277,11 @@ pub const Supervisor = struct {
         }
     }
 
+    pub fn beginStdinInput(self: *Supervisor) void {
+        self.input_mode = .stdin;
+        self.search_input.clearRetainingCapacity();
+    }
+
     pub fn cancelInput(self: *Supervisor) void {
         self.input_mode = .none;
         self.search_input.clearRetainingCapacity();
@@ -299,6 +305,32 @@ pub const Supervisor = struct {
             self.allocator.dupe(u8, self.search_input.items) catch null;
         self.cancelInput();
         self.refreshPausedLogEnd();
+    }
+
+    pub fn sendStdinInput(self: *Supervisor) void {
+        const process = self.selectedProcess() orelse {
+            self.cancelInput();
+            return;
+        };
+        if (process.status != .running) {
+            self.appendSystem(process, "stdin ignored: process is not running", .{}) catch {};
+            self.cancelInput();
+            return;
+        }
+
+        const line = std.fmt.allocPrint(self.allocator, "{s}\n", .{self.search_input.items}) catch {
+            self.cancelInput();
+            return;
+        };
+        defer self.allocator.free(line);
+        process.runner.writeStdin(self.io, line) catch |err| {
+            self.setLastError(process, @errorName(err));
+            self.appendSystem(process, "stdin failed: {s}", .{@errorName(err)}) catch {};
+            self.cancelInput();
+            return;
+        };
+        self.appendSystem(process, "stdin sent", .{}) catch {};
+        self.cancelInput();
     }
 
     pub fn cycleStreamFilter(self: *Supervisor) void {

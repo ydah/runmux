@@ -95,6 +95,7 @@ a               start all processes
 x               stop all processes
 Tab             switch selected/all logs
 /               search logs by substring
+i               send one line to selected stdin
 s               cycle stream filter
 f               filter logs to selected process
 u               clear log filters

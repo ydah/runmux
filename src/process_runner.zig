@@ -9,6 +9,7 @@ pub const ProcessRunner = struct {
     process_id: u32,
     queue: *event_queue.EventQueue,
     child: ?*std.process.Child = null,
+    stdin_file: ?std.Io.File = null,
     stdout_thread: ?std.Thread = null,
     stderr_thread: ?std.Thread = null,
     wait_thread: ?std.Thread = null,
@@ -49,15 +50,17 @@ pub const ProcessRunner = struct {
             .argv = argv,
             .cwd = .{ .path = spec.cwd },
             .environ_map = &env,
-            .stdin = .ignore,
+            .stdin = .pipe,
             .stdout = .pipe,
             .stderr = .pipe,
             .pgid = platform.childProcessGroupId(),
         });
         errdefer child.kill(io);
 
+        const stdin_file = child.stdin.?;
         const stdout_file = child.stdout.?;
         const stderr_file = child.stderr.?;
+        child.stdin = null;
         child.stdout = null;
         child.stderr = null;
 
@@ -74,6 +77,7 @@ pub const ProcessRunner = struct {
             .file = stdout_file,
             .io = io,
         }}) catch |err| {
+            stdin_file.close(io);
             stdout_file.close(io);
             stderr_file.close(io);
             child_ptr.kill(io);
@@ -90,6 +94,7 @@ pub const ProcessRunner = struct {
             .io = io,
         }}) catch |err| {
             platform.sendTerm(pid, platform.childProcessGroupId() != null);
+            stdin_file.close(io);
             stderr_file.close(io);
             child_ptr.kill(io);
             return err;
@@ -104,11 +109,13 @@ pub const ProcessRunner = struct {
             .io = io,
         }}) catch |err| {
             platform.sendTerm(pid, platform.childProcessGroupId() != null);
+            stdin_file.close(io);
             child_ptr.kill(io);
             return err;
         };
 
         self.child = child_ptr;
+        self.stdin_file = stdin_file;
         self.stdout_thread = stdout_thread;
         self.stderr_thread = stderr_thread;
         self.wait_thread = wait_thread;
@@ -129,14 +136,20 @@ pub const ProcessRunner = struct {
         platform.sendKill(pid, self.process_group);
     }
 
+    pub fn writeStdin(self: *ProcessRunner, io: std.Io, bytes: []const u8) !void {
+        const file = self.stdin_file orelse return error.NotRunning;
+        try file.writeStreamingAll(io, bytes);
+    }
+
     pub fn join(self: *ProcessRunner, io: std.Io) void {
-        _ = io;
+        if (self.stdin_file) |file| file.close(io);
         if (self.stdout_thread) |thread| thread.join();
         if (self.stderr_thread) |thread| thread.join();
         if (self.wait_thread) |thread| thread.join();
         if (self.child) |child| self.allocator.destroy(child);
 
         self.child = null;
+        self.stdin_file = null;
         self.stdout_thread = null;
         self.stderr_thread = null;
         self.wait_thread = null;
