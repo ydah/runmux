@@ -150,11 +150,11 @@ q or Ctrl+C     stop children and quit
 
 ## Limitations
 
-- POSIX is the primary target. Windows uses `COMSPEC` for shell commands and can terminate direct child processes, but process-tree cleanup is still incomplete.
+- POSIX is the primary target. Windows uses `COMSPEC` for shell commands and Job Objects for process-tree cleanup when available.
 - This is not a pseudo-terminal multiplexer; interactive child stdin is not forwarded.
 - Child process stdout/stderr are piped into the TUI, so programs that require a real TTY may behave differently.
 - ANSI escape sequences are stripped by default. If `log.strip_ansi` is `false`, basic SGR color/style codes are rendered safely and other escape sequences are dropped.
-- POSIX child processes are started in a dedicated process group so stop/kill targets their process tree. Windows process-tree cleanup beyond direct children is still incomplete.
+- POSIX child processes are started in a dedicated process group so stop/kill targets their process tree. Windows child processes are assigned to a Job Object when possible, with direct-process termination as a fallback.
 - Unicode width handling is delegated to libvaxis, but complex logs can still render imperfectly in some terminals.
 
 ## Development

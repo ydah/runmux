@@ -14,6 +14,7 @@ pub const ProcessRunner = struct {
     stderr_thread: ?std.Thread = null,
     wait_thread: ?std.Thread = null,
     process_group: bool = false,
+    process_tree: platform.ProcessTree = .{},
 
     pub fn init(allocator: std.mem.Allocator, process_id: u32, queue: *event_queue.EventQueue) ProcessRunner {
         return .{
@@ -46,6 +47,10 @@ pub const ProcessRunner = struct {
             spec.argv;
         defer if (spec.cmd != null) self.allocator.free(argv);
 
+        var process_tree = platform.ProcessTree.init();
+        errdefer process_tree.close();
+        const start_suspended = process_tree.shouldStartSuspended();
+
         var child = try std.process.spawn(io, .{
             .argv = argv,
             .cwd = .{ .path = spec.cwd },
@@ -54,8 +59,12 @@ pub const ProcessRunner = struct {
             .stdout = .pipe,
             .stderr = .pipe,
             .pgid = platform.childProcessGroupId(),
+            .start_suspended = start_suspended,
         });
-        errdefer child.kill(io);
+        errdefer {
+            if (start_suspended) platform.resumeChild(&child);
+            child.kill(io);
+        }
 
         const stdin_file = child.stdin.?;
         const stdout_file = child.stdout.?;
@@ -65,6 +74,9 @@ pub const ProcessRunner = struct {
         child.stderr = null;
 
         const pid = child.id.?;
+        process_tree.attach(pid);
+        if (start_suspended) platform.resumeChild(&child);
+
         const child_ptr = try self.allocator.create(std.process.Child);
         child_ptr.* = child;
         errdefer self.allocator.destroy(child_ptr);
@@ -80,6 +92,7 @@ pub const ProcessRunner = struct {
             stdin_file.close(io);
             stdout_file.close(io);
             stderr_file.close(io);
+            _ = process_tree.terminate(1);
             child_ptr.kill(io);
             return err;
         };
@@ -93,7 +106,7 @@ pub const ProcessRunner = struct {
             .file = stderr_file,
             .io = io,
         }}) catch |err| {
-            platform.sendTerm(pid, platform.childProcessGroupId() != null);
+            if (!process_tree.terminate(1)) platform.sendTerm(pid, platform.childProcessGroupId() != null);
             stdin_file.close(io);
             stderr_file.close(io);
             child_ptr.kill(io);
@@ -108,7 +121,7 @@ pub const ProcessRunner = struct {
             .child = child_ptr,
             .io = io,
         }}) catch |err| {
-            platform.sendTerm(pid, platform.childProcessGroupId() != null);
+            if (!process_tree.terminate(1)) platform.sendTerm(pid, platform.childProcessGroupId() != null);
             stdin_file.close(io);
             child_ptr.kill(io);
             return err;
@@ -120,6 +133,8 @@ pub const ProcessRunner = struct {
         self.stderr_thread = stderr_thread;
         self.wait_thread = wait_thread;
         self.process_group = platform.childProcessGroupId() != null;
+        self.process_tree = process_tree;
+        process_tree = platform.ProcessTree.empty();
 
         return pid;
     }
@@ -127,12 +142,14 @@ pub const ProcessRunner = struct {
     pub fn stop(self: *ProcessRunner) void {
         const child = self.child orelse return;
         const pid = child.id orelse return;
+        if (self.process_tree.terminate(1)) return;
         platform.sendTerm(pid, self.process_group);
     }
 
     pub fn kill(self: *ProcessRunner) void {
         const child = self.child orelse return;
         const pid = child.id orelse return;
+        if (self.process_tree.terminate(1)) return;
         platform.sendKill(pid, self.process_group);
     }
 
@@ -147,6 +164,7 @@ pub const ProcessRunner = struct {
         if (self.stderr_thread) |thread| thread.join();
         if (self.wait_thread) |thread| thread.join();
         if (self.child) |child| self.allocator.destroy(child);
+        self.process_tree.close();
 
         self.child = null;
         self.stdin_file = null;
@@ -154,6 +172,7 @@ pub const ProcessRunner = struct {
         self.stderr_thread = null;
         self.wait_thread = null;
         self.process_group = false;
+        self.process_tree = .{};
     }
 };
 
