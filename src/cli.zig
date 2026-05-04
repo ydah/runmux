@@ -85,7 +85,7 @@ pub const help_text =
     \\TUI keys:
     \\  Up/k, Down/j select   Enter start/stop   r restart
     \\  a start all           x stop all         Tab log mode
-    \\  p pause logs          ? help             q or Ctrl+C quit
+    \\  p pause follow        ? help             q or Ctrl+C quit
     \\
 ;
 

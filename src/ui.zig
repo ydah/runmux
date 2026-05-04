@@ -97,7 +97,7 @@ fn handleKey(supervisor: *Supervisor, key: vaxis.Key) void {
         return;
     }
     if (key.matches('p', .{})) {
-        supervisor.paused = !supervisor.paused;
+        supervisor.togglePause();
         return;
     }
     if (key.matches('?', .{})) {
@@ -138,7 +138,7 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
     const footer_rows: u16 = 2;
     const top: u16 = 2;
     const content_height = root.height - top - footer_rows;
-    const process_width: u16 = if (root.width < 90) @max(@as(u16, 24), root.width / 3) else 36;
+    const process_width: u16 = if (root.width < 90) @max(@as(u16, 28), root.width / 3) else 46;
     const log_x = process_width + 2;
     const log_width = root.width - log_x;
     const process_window = root.child(.{ .x_off = 0, .y_off = 0, .width = process_width, .height = root.height });
@@ -152,13 +152,16 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
         if (row >= top + content_height) break;
         const selected = index == supervisor.selected_index;
         const pid_text = if (process.pid) |pid| try std.fmt.allocPrint(allocator, "{d}", .{pid}) else "-";
-        const line = try std.fmt.allocPrint(allocator, "{s} {s} {s:<12} {s:<10} pid={s} r={d}", .{
+        const last_text = try lastResultAlloc(allocator, process);
+        const line = try std.fmt.allocPrint(allocator, "{s} {s}{s} {s:<12} {s:<10} pid={s} r={d} {s}", .{
             if (selected) ">" else " ",
             statusGlyph(process.status),
+            if (process.spec.critical) "!" else " ",
             process.spec.name,
             @tagName(process.status),
             pid_text,
             process.restart_count,
+            last_text,
         });
         print(process_window, 0, row, line, if (selected) .{ .reverse = true, .bold = true } else statusStyle(process.status));
         row += 1;
@@ -176,9 +179,10 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
     defer if (logs.len > 0) allocator.free(logs);
 
     const visible: usize = content_height;
-    const start = if (logs.len > visible) logs.len - visible else 0;
+    const end = if (supervisor.paused_log_end) |paused_end| @min(paused_end, logs.len) else logs.len;
+    const start = if (end > visible) end - visible else 0;
     row = top;
-    for (logs[start..]) |line| {
+    for (logs[start..end]) |line| {
         if (row >= top + content_height) break;
         const time_text = try formatTimeAlloc(allocator, line.timestamp_ms);
         const prefix = try std.fmt.allocPrint(allocator, "{s} [{s}:{s}] ", .{
@@ -228,7 +232,7 @@ fn renderHelp(root: vaxis.Window) void {
     print(popup, 1, 4, "r               restart selected", style);
     print(popup, 1, 5, "a / x           start all / stop all", style);
     print(popup, 1, 6, "Tab             selected or all logs", style);
-    print(popup, 1, 7, "p               pause follow indicator", style);
+    print(popup, 1, 7, "p               pause or resume log follow", style);
     print(popup, 1, 8, "q or Ctrl+C     quit and stop children", style);
 }
 
@@ -267,6 +271,19 @@ fn streamStyle(stream: log_store.Stream, prefix: bool) vaxis.Style {
         .stderr => .{ .fg = .{ .index = 1 }, .bold = prefix },
         .system => .{ .fg = .{ .index = 3 }, .bold = prefix },
     };
+}
+
+fn lastResultAlloc(allocator: std.mem.Allocator, process: *const supervisor_mod.RuntimeProcess) ![]const u8 {
+    if (process.last_exit_code) |code| {
+        return std.fmt.allocPrint(allocator, "exit={d}", .{code});
+    }
+    if (process.last_signal) |signal| {
+        return std.fmt.allocPrint(allocator, "sig={d}", .{signal});
+    }
+    if (process.last_error != null) {
+        return allocator.dupe(u8, "err");
+    }
+    return allocator.dupe(u8, "exit=-");
 }
 
 fn formatTimeAlloc(allocator: std.mem.Allocator, timestamp_ms: i64) ![]const u8 {

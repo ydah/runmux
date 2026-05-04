@@ -77,7 +77,7 @@ The default config file is `runmux.json`.
 }
 ```
 
-Each process must set exactly one of `cmd` or `argv`. `cmd` runs through the shell. `argv` runs directly.
+Each process must set exactly one of `cmd` or `argv`. `cmd` runs through the shell by default. If `shell` is set to `false`, `cmd` must be a single executable path with no arguments; use `argv` for direct execution with arguments.
 
 ## TUI Keys
 
@@ -88,7 +88,7 @@ r               restart selected process
 a               start all processes
 x               stop all processes
 Tab             switch selected/all logs
-p               toggle pause indicator
+p               pause or resume log follow
 ?               help overlay
 q or Ctrl+C     stop children and quit
 ```

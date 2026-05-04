@@ -312,6 +312,15 @@ fn resolveProcess(
 
     const cwd = raw.cwd orelse defaults.cwd;
     try validateCwd(io, profile_name, raw.name, cwd, diagnostics);
+    const shell = raw.shell orelse defaults.shell;
+    if (raw.cmd) |cmd| {
+        if (!shell and containsAsciiWhitespace(cmd)) {
+            return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": shell=false cmd cannot contain whitespace; use argv instead", .{
+                profile_name,
+                raw.name,
+            });
+        }
+    }
 
     return .{
         .name = raw.name,
@@ -319,12 +328,22 @@ fn resolveProcess(
         .argv = argv,
         .cwd = cwd,
         .env = env,
-        .shell = raw.shell orelse defaults.shell,
+        .shell = shell,
         .autostart = raw.autostart orelse defaults.autostart,
         .critical = raw.critical orelse false,
         .restart = restart,
         .log = log,
     };
+}
+
+fn containsAsciiWhitespace(value: []const u8) bool {
+    for (value) |byte| {
+        switch (byte) {
+            ' ', '\t', '\n', '\r', 0x0b, 0x0c => return true,
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn resolveEnv(
@@ -522,4 +541,15 @@ test "config_applies_defaults" {
     try std.testing.expectEqual(RestartPolicy.on_failure, process.restart.policy);
     try std.testing.expectEqual(@as(u32, 2), process.restart.max_restarts);
     try std.testing.expectEqual(@as(u32, 12), process.log.max_lines);
+}
+
+test "config_rejects_shell_false_cmd_with_whitespace" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"api","cmd":"echo 1","shell":false}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "shell=false") != null);
 }

@@ -17,6 +17,12 @@ pub fn shellArgv(allocator: std.mem.Allocator, cmd: []const u8, shell_path: []co
     return argv;
 }
 
+pub fn directArgv(allocator: std.mem.Allocator, cmd: []const u8) ![]const []const u8 {
+    const argv = try allocator.alloc([]const u8, 1);
+    argv[0] = cmd;
+    return argv;
+}
+
 pub fn sendTerm(pid: std.process.Child.Id) void {
     switch (builtin.os.tag) {
         .windows => {},

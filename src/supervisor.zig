@@ -32,6 +32,8 @@ pub const RuntimeProcess = struct {
     last_signal: ?u32 = null,
     last_error: ?[]u8 = null,
     restart_due_ms: ?i64 = null,
+    stop_kill_due_ms: ?i64 = null,
+    kill_sent: bool = false,
     stop_requested: bool = false,
     pending_manual_restart: bool = false,
     stdout_assembler: line_assembler.LineAssembler,
@@ -51,6 +53,7 @@ pub const Supervisor = struct {
     selected_index: usize = 0,
     log_mode: LogMode = .selected,
     paused: bool = false,
+    paused_log_end: ?usize = null,
     show_help: bool = false,
     should_quit: bool = false,
 
@@ -141,17 +144,28 @@ pub const Supervisor = struct {
                     }
                 }
             }
+            if (process.status == .stopping and !process.kill_sent) {
+                if (process.stop_kill_due_ms) |due| {
+                    if (now >= due) {
+                        process.kill_sent = true;
+                        process.runner.kill();
+                        self.appendSystem(process, "stop timeout reached; sent kill", .{}) catch {};
+                    }
+                }
+            }
         }
     }
 
     pub fn selectNext(self: *Supervisor) void {
         if (self.processes.len == 0) return;
         self.selected_index = (self.selected_index + 1) % self.processes.len;
+        self.refreshPausedLogEnd();
     }
 
     pub fn selectPrev(self: *Supervisor) void {
         if (self.processes.len == 0) return;
         self.selected_index = if (self.selected_index == 0) self.processes.len - 1 else self.selected_index - 1;
+        self.refreshPausedLogEnd();
     }
 
     pub fn toggleSelected(self: *Supervisor) void {
@@ -188,6 +202,12 @@ pub const Supervisor = struct {
             .selected => .all,
             .all => .selected,
         };
+        self.refreshPausedLogEnd();
+    }
+
+    pub fn togglePause(self: *Supervisor) void {
+        self.paused = !self.paused;
+        self.paused_log_end = if (self.paused) self.currentLogCount() else null;
     }
 
     pub fn selectedProcess(self: *Supervisor) ?*RuntimeProcess {
@@ -203,6 +223,13 @@ pub const Supervisor = struct {
             }
         }
         return count;
+    }
+
+    pub fn currentLogCount(self: *const Supervisor) usize {
+        return switch (self.log_mode) {
+            .selected => if (self.processes.len == 0) 0 else self.processes[self.selected_index].logs.len(),
+            .all => self.global_logs.len(),
+        };
     }
 
     pub fn shutdown(self: *Supervisor) void {
@@ -236,6 +263,8 @@ pub const Supervisor = struct {
         process.status = .starting;
         process.stop_requested = false;
         process.pending_manual_restart = false;
+        process.stop_kill_due_ms = null;
+        process.kill_sent = false;
         process.last_exit_code = null;
         process.last_signal = null;
         self.setLastError(process, null);
@@ -255,11 +284,20 @@ pub const Supervisor = struct {
 
     fn stopProcess(self: *Supervisor, process: *RuntimeProcess) void {
         switch (process.status) {
-            .running, .starting, .restarting => {
+            .running, .starting => {
                 process.stop_requested = true;
                 process.status = .stopping;
+                process.stop_kill_due_ms = nowMs(self.io) + 2000;
+                process.kill_sent = false;
                 process.runner.stop();
                 self.appendSystem(process, "stopping", .{}) catch {};
+            },
+            .restarting => {
+                process.stop_requested = false;
+                process.pending_manual_restart = false;
+                process.restart_due_ms = null;
+                process.status = .exited;
+                self.appendSystem(process, "restart canceled", .{}) catch {};
             },
             else => {},
         }
@@ -294,9 +332,17 @@ pub const Supervisor = struct {
         process.runner.join(self.io);
         process.pid = null;
         process.restart_due_ms = null;
+        process.stop_kill_due_ms = null;
+        process.kill_sent = false;
 
         const failed = self.applyTerm(process, exited.term);
-        self.appendSystem(process, "exited {s}", .{termText(exited.term)}) catch {};
+        const term_text = termTextAlloc(self.allocator, exited.term) catch null;
+        if (term_text) |text| {
+            defer self.allocator.free(text);
+            self.appendSystem(process, "exited {s}", .{text}) catch {};
+        } else {
+            self.appendSystem(process, "exited unknown", .{}) catch {};
+        }
 
         if (process.pending_manual_restart) {
             process.pending_manual_restart = false;
@@ -360,6 +406,10 @@ pub const Supervisor = struct {
         return &self.processes[@intCast(id)];
     }
 
+    fn refreshPausedLogEnd(self: *Supervisor) void {
+        if (self.paused) self.paused_log_end = self.currentLogCount();
+    }
+
     fn applyTerm(self: *Supervisor, process: *RuntimeProcess, term: event_queue.TermInfo) bool {
         _ = self;
         process.last_exit_code = null;
@@ -391,11 +441,11 @@ pub fn nowMs(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .real).toMilliseconds();
 }
 
-fn termText(term: event_queue.TermInfo) []const u8 {
+fn termTextAlloc(allocator: std.mem.Allocator, term: event_queue.TermInfo) ![]u8 {
     return switch (term) {
-        .exited => "exit",
-        .signal => "signal",
-        .stopped => "stopped",
-        .unknown => "unknown",
+        .exited => |code| std.fmt.allocPrint(allocator, "exit={d}", .{code}),
+        .signal => |signal| std.fmt.allocPrint(allocator, "signal={d}", .{signal}),
+        .stopped => |signal| std.fmt.allocPrint(allocator, "stopped={d}", .{signal}),
+        .unknown => |code| std.fmt.allocPrint(allocator, "unknown={d}", .{code}),
     };
 }

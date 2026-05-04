@@ -36,7 +36,10 @@ pub const ProcessRunner = struct {
         }
 
         const argv = if (spec.cmd) |cmd|
-            try platform.shellArgv(self.allocator, cmd, parent_env.get("SHELL") orelse "/bin/sh")
+            if (spec.shell)
+                try platform.shellArgv(self.allocator, cmd, parent_env.get("SHELL") orelse "/bin/sh")
+            else
+                try platform.directArgv(self.allocator, cmd)
         else
             spec.argv;
         defer if (spec.cmd != null) self.allocator.free(argv);

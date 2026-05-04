@@ -48,6 +48,10 @@ pub const LogStore = struct {
         });
     }
 
+    pub fn len(self: *const LogStore) usize {
+        return self.lines.len();
+    }
+
     pub fn snapshot(self: *const LogStore, allocator: std.mem.Allocator) ![]LogLine {
         return self.lines.snapshot(allocator);
     }
