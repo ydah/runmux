@@ -17,6 +17,7 @@ pub const Options = struct {
     config_path: []const u8 = default_config_path,
     profile_name: ?[]const u8 = null,
     plain: bool = false,
+    log_dir: ?[]const u8 = null,
 };
 
 pub const ParseError = error{
@@ -58,6 +59,12 @@ pub fn parse(args: []const [:0]const u8) ParseError!Options {
             result.plain = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--log-dir")) {
+            index += 1;
+            if (index >= args.len) return error.MissingValue;
+            result.log_dir = args[index];
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--")) return error.UnknownOption;
 
         if (command_seen) return error.TooManyCommands;
@@ -80,7 +87,7 @@ pub const help_text =
     \\runmux - lightweight TUI command runner
     \\
     \\Usage:
-    \\  runmux run [--config runmux.json] [--profile dev] [--plain]
+    \\  runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs]
     \\  runmux check [--config runmux.json] [--profile dev]
     \\  runmux init [--config runmux.json]
     \\  runmux list [--config runmux.json] [--profile dev]
@@ -90,7 +97,8 @@ pub const help_text =
     \\TUI keys:
     \\  Up/k, Down/j select   Enter start/stop   r restart
     \\  a start all           x stop all         Tab log mode
-    \\  p pause follow        ? help             q or Ctrl+C quit
+    \\  / search              s/f/u filter       p pause follow
+    \\  ? help                q or Ctrl+C quit
     \\
 ;
 
@@ -114,4 +122,11 @@ test "parse plain run option" {
     const opts = try parse(&args);
     try std.testing.expectEqual(Command.run, opts.command);
     try std.testing.expect(opts.plain);
+}
+
+test "parse log dir option" {
+    const args = [_][:0]const u8{ "runmux", "run", "--log-dir", "logs" };
+    const opts = try parse(&args);
+    try std.testing.expectEqual(Command.run, opts.command);
+    try std.testing.expectEqualStrings("logs", opts.log_dir.?);
 }

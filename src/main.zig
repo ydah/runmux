@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
         .init => try commandInit(io, parsed.config_path),
         .check => try commandCheck(allocator, io, parsed.config_path, parsed.profile_name),
         .list => try commandList(allocator, io, parsed.config_path, parsed.profile_name),
-        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain),
+        .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain, parsed.log_dir),
     }
 }
 
@@ -104,6 +104,7 @@ fn commandRun(
     path: []const u8,
     profile_name: ?[]const u8,
     plain: bool,
+    log_dir: ?[]const u8,
 ) !void {
     var diagnostics = config.Diagnostics.init(allocator);
     defer diagnostics.deinit();
@@ -114,8 +115,12 @@ fn commandRun(
     };
     defer loaded.deinit();
 
+    const run_options: runmux.supervisor.Options = .{
+        .log_dir = log_dir,
+    };
+
     if (plain) {
-        runmux.plain.run(allocator, io, environ_map, &loaded.profile) catch |err| {
+        runmux.plain.run(allocator, io, environ_map, &loaded.profile, run_options) catch |err| {
             switch (err) {
                 error.ChildFailed => std.process.exit(4),
                 else => {
@@ -127,7 +132,7 @@ fn commandRun(
         return;
     }
 
-    runmux.ui.run(allocator, io, environ_map, &loaded.profile) catch |err| {
+    runmux.ui.run(allocator, io, environ_map, &loaded.profile, run_options) catch |err| {
         try printErr(io, "error: TUI failed: {s}\n", .{@errorName(err)});
         std.process.exit(3);
     };

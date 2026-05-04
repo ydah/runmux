@@ -22,7 +22,7 @@ zig build run -- run
 ## Commands
 
 ```sh
-runmux run [--config runmux.json] [--profile dev] [--plain]
+runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs]
 runmux check [--config runmux.json] [--profile dev]
 runmux init [--config runmux.json]
 runmux list [--config runmux.json] [--profile dev]
@@ -30,7 +30,7 @@ runmux --help
 runmux --version
 ```
 
-`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals.
+`check` validates the JSON config and selected profile without starting child processes. `list` prints the resolved process list. `run` starts autostart processes and opens the TUI. Use `run --plain` to run without the TUI and print prefixed logs; this is useful in CI and non-interactive terminals. Use `--log-dir` to write one log file per process.
 
 ## Config File
 
@@ -88,6 +88,10 @@ r               restart selected process
 a               start all processes
 x               stop all processes
 Tab             switch selected/all logs
+/               search logs by substring
+s               cycle stream filter
+f               filter logs to selected process
+u               clear log filters
 p               pause or resume log follow
 ?               help overlay
 q or Ctrl+C     stop children and quit
@@ -112,4 +116,5 @@ zig build run -- check --config runmux.example.json
 zig build run -- list --config runmux.example.json
 zig build run -- run --config runmux.example.json
 zig build run -- run --plain --config testdata/plain.runmux.json
+zig build run -- run --plain --config testdata/plain.runmux.json --log-dir logs
 ```

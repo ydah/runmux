@@ -22,6 +22,16 @@ pub const LogMode = enum {
     all,
 };
 
+pub const InputMode = enum {
+    none,
+    search,
+};
+
+pub const Options = struct {
+    log_dir: ?[]const u8 = null,
+    exit_on_critical_failure: bool = false,
+};
+
 pub const RuntimeProcess = struct {
     id: u32,
     spec: *const config.ProcessSpec,
@@ -48,12 +58,19 @@ pub const Supervisor = struct {
     parent_env: *const std.process.Environ.Map,
     profile: *const config.ResolvedProfile,
     queue: *event_queue.EventQueue,
+    options: Options,
     processes: []RuntimeProcess,
     global_logs: log_store.LogStore,
+    log_files: []?std.Io.File,
     selected_index: usize = 0,
     log_mode: LogMode = .selected,
     paused: bool = false,
     paused_log_end: ?usize = null,
+    input_mode: InputMode = .none,
+    search_input: std.ArrayList(u8) = .empty,
+    filter_query: ?[]u8 = null,
+    filter_stream: ?log_store.Stream = null,
+    filter_process_id: ?u32 = null,
     show_help: bool = false,
     should_quit: bool = false,
 
@@ -62,6 +79,7 @@ pub const Supervisor = struct {
         io: std.Io,
         parent_env: *const std.process.Environ.Map,
         profile: *const config.ResolvedProfile,
+        options: Options,
     ) !Supervisor {
         const queue = try allocator.create(event_queue.EventQueue);
         queue.* = event_queue.EventQueue.init(allocator, io);
@@ -71,7 +89,15 @@ pub const Supervisor = struct {
         }
 
         var processes = try allocator.alloc(RuntimeProcess, profile.processes.len);
-        errdefer allocator.free(processes);
+        var initialized_processes: usize = 0;
+        errdefer {
+            for (processes[0..initialized_processes]) |*process| {
+                process.stdout_assembler.deinit();
+                process.stderr_assembler.deinit();
+                process.logs.deinit();
+            }
+            allocator.free(processes);
+        }
 
         for (profile.processes, 0..) |*spec, index| {
             const id: u32 = @intCast(index);
@@ -84,7 +110,13 @@ pub const Supervisor = struct {
                 .logs = try log_store.LogStore.init(allocator, @intCast(spec.log.max_lines)),
                 .runner = process_runner.ProcessRunner.init(allocator, id, queue),
             };
+            initialized_processes += 1;
         }
+
+        const log_files = try openLogFiles(allocator, io, profile, options.log_dir);
+        errdefer closeLogFiles(io, allocator, log_files);
+        var global_logs = try log_store.LogStore.init(allocator, 4000);
+        errdefer global_logs.deinit();
 
         return .{
             .allocator = allocator,
@@ -92,8 +124,10 @@ pub const Supervisor = struct {
             .parent_env = parent_env,
             .profile = profile,
             .queue = queue,
+            .options = options,
             .processes = processes,
-            .global_logs = try log_store.LogStore.init(allocator, 4000),
+            .global_logs = global_logs,
+            .log_files = log_files,
         };
     }
 
@@ -106,8 +140,11 @@ pub const Supervisor = struct {
             process.logs.deinit();
             if (process.last_error) |message| self.allocator.free(message);
         }
+        closeLogFiles(self.io, self.allocator, self.log_files);
         self.allocator.free(self.processes);
         self.global_logs.deinit();
+        self.search_input.deinit(self.allocator);
+        if (self.filter_query) |query| self.allocator.free(query);
         self.queue.deinit();
         self.allocator.destroy(self.queue);
         self.* = undefined;
@@ -208,6 +245,65 @@ pub const Supervisor = struct {
     pub fn togglePause(self: *Supervisor) void {
         self.paused = !self.paused;
         self.paused_log_end = if (self.paused) self.currentLogCount() else null;
+    }
+
+    pub fn beginSearch(self: *Supervisor) void {
+        self.input_mode = .search;
+        self.search_input.clearRetainingCapacity();
+        if (self.filter_query) |query| {
+            self.search_input.appendSlice(self.allocator, query) catch {};
+        }
+    }
+
+    pub fn cancelInput(self: *Supervisor) void {
+        self.input_mode = .none;
+        self.search_input.clearRetainingCapacity();
+    }
+
+    pub fn appendInputText(self: *Supervisor, text: []const u8) void {
+        if (self.input_mode == .none) return;
+        self.search_input.appendSlice(self.allocator, text) catch {};
+    }
+
+    pub fn deleteInputByte(self: *Supervisor) void {
+        if (self.search_input.items.len == 0) return;
+        _ = self.search_input.pop();
+    }
+
+    pub fn applySearch(self: *Supervisor) void {
+        if (self.filter_query) |query| self.allocator.free(query);
+        self.filter_query = if (self.search_input.items.len == 0)
+            null
+        else
+            self.allocator.dupe(u8, self.search_input.items) catch null;
+        self.cancelInput();
+        self.refreshPausedLogEnd();
+    }
+
+    pub fn cycleStreamFilter(self: *Supervisor) void {
+        self.filter_stream = if (self.filter_stream) |stream| switch (stream) {
+            .stdout => .stderr,
+            .stderr => .system,
+            .system => null,
+        } else .stdout;
+        self.refreshPausedLogEnd();
+    }
+
+    pub fn toggleProcessFilter(self: *Supervisor) void {
+        const selected = if (self.selectedProcess()) |process| process.id else return;
+        self.filter_process_id = if (self.filter_process_id) |current|
+            if (current == selected) null else selected
+        else
+            selected;
+        self.refreshPausedLogEnd();
+    }
+
+    pub fn clearFilters(self: *Supervisor) void {
+        if (self.filter_query) |query| self.allocator.free(query);
+        self.filter_query = null;
+        self.filter_stream = null;
+        self.filter_process_id = null;
+        self.refreshPausedLogEnd();
     }
 
     pub fn selectedProcess(self: *Supervisor) ?*RuntimeProcess {
@@ -406,6 +502,13 @@ pub const Supervisor = struct {
         const timestamp = nowMs(self.io);
         try process.logs.append(timestamp, process.id, process.spec.name, stream, text);
         try self.global_logs.append(timestamp, process.id, process.spec.name, stream, text);
+        if (self.log_files.len > process.id) {
+            if (self.log_files[process.id]) |file| {
+                writeLogFileLine(self.io, file, timestamp, process.spec.name, stream, text) catch |err| {
+                    self.setLastError(process, @errorName(err));
+                };
+            }
+        }
     }
 
     fn processById(self: *Supervisor, id: u32) ?*RuntimeProcess {
@@ -444,8 +547,92 @@ pub const Supervisor = struct {
     }
 };
 
+fn openLogFiles(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    profile: *const config.ResolvedProfile,
+    log_dir: ?[]const u8,
+) ![]?std.Io.File {
+    const dir_path = log_dir orelse return allocator.alloc(?std.Io.File, 0);
+    try std.Io.Dir.cwd().createDirPath(io, dir_path);
+
+    var files = try allocator.alloc(?std.Io.File, profile.processes.len);
+    @memset(files, null);
+    errdefer closeLogFiles(io, allocator, files);
+
+    for (profile.processes, 0..) |process, index| {
+        const path = try logFilePath(allocator, dir_path, process.name);
+        defer allocator.free(path);
+        files[index] = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    }
+    return files;
+}
+
+fn closeLogFiles(io: std.Io, allocator: std.mem.Allocator, files: []?std.Io.File) void {
+    for (files) |maybe_file| {
+        if (maybe_file) |file| file.close(io);
+    }
+    allocator.free(files);
+}
+
+fn logFilePath(allocator: std.mem.Allocator, dir_path: []const u8, process_name: []const u8) ![]u8 {
+    var path: std.ArrayList(u8) = .empty;
+    errdefer path.deinit(allocator);
+
+    try path.appendSlice(allocator, dir_path);
+    if (dir_path.len > 0 and dir_path[dir_path.len - 1] != std.fs.path.sep) {
+        try path.append(allocator, std.fs.path.sep);
+    }
+    for (process_name) |byte| {
+        const safe = switch (byte) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => byte,
+            else => '_',
+        };
+        try path.append(allocator, safe);
+    }
+    try path.appendSlice(allocator, ".log");
+    return path.toOwnedSlice(allocator);
+}
+
+fn writeLogFileLine(
+    io: std.Io,
+    file: std.Io.File,
+    timestamp_ms: i64,
+    process_name: []const u8,
+    stream: log_store.Stream,
+    text: []const u8,
+) !void {
+    var buffer: [4096]u8 = undefined;
+    var writer = file.writerStreaming(io, &buffer);
+    const time = formatTime(timestamp_ms);
+    try writer.interface.print("{s} [{s}:{s}] {s}\n", .{
+        &time,
+        process_name,
+        @tagName(stream),
+        text,
+    });
+    try writer.interface.flush();
+}
+
 pub fn nowMs(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .real).toMilliseconds();
+}
+
+fn formatTime(timestamp_ms: i64) [8]u8 {
+    const total_seconds: i64 = @mod(@divFloor(timestamp_ms, 1000), 24 * 60 * 60);
+    const hour: u8 = @intCast(@divFloor(total_seconds, 3600));
+    const minute: u8 = @intCast(@divFloor(@mod(total_seconds, 3600), 60));
+    const second: u8 = @intCast(@mod(total_seconds, 60));
+    return .{
+        '0' + hour / 10,
+        '0' + hour % 10,
+        ':',
+        '0' + minute / 10,
+        '0' + minute % 10,
+        ':',
+        '0' + second / 10,
+        '0' + second % 10,
+    };
 }
 
 fn termTextAlloc(allocator: std.mem.Allocator, term: event_queue.TermInfo) ![]u8 {

@@ -12,8 +12,9 @@ pub fn run(
     io: std.Io,
     environ_map: *std.process.Environ.Map,
     profile: *const config.ResolvedProfile,
+    options: supervisor_mod.Options,
 ) !void {
-    var supervisor = try supervisor_mod.Supervisor.init(allocator, io, environ_map, profile);
+    var supervisor = try supervisor_mod.Supervisor.init(allocator, io, environ_map, profile, options);
     defer supervisor.deinit();
 
     supervisor.startAutostart();

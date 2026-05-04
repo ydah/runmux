@@ -16,8 +16,9 @@ pub fn run(
     io: std.Io,
     environ_map: *std.process.Environ.Map,
     profile: *const config.ResolvedProfile,
+    options: supervisor_mod.Options,
 ) !void {
-    var supervisor = try Supervisor.init(allocator, io, environ_map, profile);
+    var supervisor = try Supervisor.init(allocator, io, environ_map, profile, options);
     defer supervisor.deinit();
 
     var tty_buffer: [4096]u8 = undefined;
@@ -64,8 +65,28 @@ pub fn run(
 }
 
 fn handleKey(supervisor: *Supervisor, key: vaxis.Key) void {
+    if (supervisor.input_mode == .search) {
+        handleSearchKey(supervisor, key);
+        return;
+    }
     if (key.matches('q', .{}) or key.matches('c', .{ .ctrl = true })) {
         supervisor.should_quit = true;
+        return;
+    }
+    if (key.matches('/', .{})) {
+        supervisor.beginSearch();
+        return;
+    }
+    if (key.matches('s', .{})) {
+        supervisor.cycleStreamFilter();
+        return;
+    }
+    if (key.matches('f', .{})) {
+        supervisor.toggleProcessFilter();
+        return;
+    }
+    if (key.matches('u', .{})) {
+        supervisor.clearFilters();
         return;
     }
     if (key.codepoint == vaxis.Key.down or key.matches('j', .{})) {
@@ -105,6 +126,26 @@ fn handleKey(supervisor: *Supervisor, key: vaxis.Key) void {
     }
 }
 
+fn handleSearchKey(supervisor: *Supervisor, key: vaxis.Key) void {
+    if (key.codepoint == vaxis.Key.enter) {
+        supervisor.applySearch();
+        return;
+    }
+    if (key.codepoint == vaxis.Key.escape) {
+        supervisor.cancelInput();
+        return;
+    }
+    if (key.codepoint == vaxis.Key.backspace) {
+        supervisor.deleteInputByte();
+        return;
+    }
+    if (key.text) |text| {
+        if (!key.mods.ctrl and !key.mods.alt and !key.mods.super and text.len > 0) {
+            supervisor.appendInputText(text);
+        }
+    }
+}
+
 fn render(allocator: std.mem.Allocator, vx: *vaxis.Vaxis, supervisor: *Supervisor) !void {
     const root = vx.window();
     root.clear();
@@ -123,13 +164,15 @@ fn render(allocator: std.mem.Allocator, vx: *vaxis.Vaxis, supervisor: *Superviso
 
 fn renderHeader(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Supervisor) !void {
     const selected_name = if (supervisor.selectedProcess()) |process| process.spec.name else "-";
-    const text = try std.fmt.allocPrint(allocator, " runmux | profile: {s} | running: {d}/{d} | selected: {s} | logs: {s}{s}", .{
+    const filter_text = try filterSummaryAlloc(allocator, supervisor);
+    const text = try std.fmt.allocPrint(allocator, " runmux | profile: {s} | running: {d}/{d} | selected: {s} | logs: {s}{s}{s}", .{
         supervisor.profile.name,
         supervisor.runningCount(),
         supervisor.processes.len,
         selected_name,
         @tagName(supervisor.log_mode),
         if (supervisor.paused) " | paused" else "",
+        filter_text,
     });
     print(root, 0, 0, text, .{ .fg = .{ .index = 15 }, .bg = .{ .index = 4 }, .bold = true });
 }
@@ -178,11 +221,20 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
     };
     defer if (logs.len > 0) allocator.free(logs);
 
+    var filtered: std.ArrayList(log_store.LogLine) = .empty;
+    defer filtered.deinit(allocator);
+    for (logs) |line| {
+        if (logMatches(supervisor, line)) {
+            try filtered.append(allocator, line);
+        }
+    }
+
     const visible: usize = content_height;
-    const end = if (supervisor.paused_log_end) |paused_end| @min(paused_end, logs.len) else logs.len;
+    const visible_logs = filtered.items;
+    const end = if (supervisor.paused_log_end) |paused_end| @min(paused_end, visible_logs.len) else visible_logs.len;
     const start = if (end > visible) end - visible else 0;
     row = top;
-    for (logs[start..end]) |line| {
+    for (visible_logs[start..end]) |line| {
         if (row >= top + content_height) break;
         const time_text = try formatTimeAlloc(allocator, line.timestamp_ms);
         const prefix = try std.fmt.allocPrint(allocator, "{s} [{s}:{s}] ", .{
@@ -200,13 +252,23 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
 }
 
 fn renderFooter(root: vaxis.Window, supervisor: *Supervisor) void {
-    _ = supervisor;
     const row = root.height - 2;
+    if (supervisor.input_mode == .search) {
+        print(root, 0, row, " Search: type query, Enter apply, Esc cancel", .{
+            .fg = .{ .index = 15 },
+            .bg = .{ .index = 8 },
+        });
+        print(root, 0, row + 1, supervisor.search_input.items, .{
+            .fg = .{ .index = 15 },
+            .bg = .{ .index = 8 },
+        });
+        return;
+    }
     print(root, 0, row, " Up/Down j/k select  Enter start/stop  r restart  a start-all  x stop-all  Tab logs", .{
         .fg = .{ .index = 15 },
         .bg = .{ .index = 8 },
     });
-    print(root, 0, row + 1, " p pause  ? help  q quit  Ctrl+C quit", .{
+    print(root, 0, row + 1, " / search  s stream-filter  f process-filter  u clear  p pause  ? help  q quit", .{
         .fg = .{ .index = 15 },
         .bg = .{ .index = 8 },
     });
@@ -214,7 +276,7 @@ fn renderFooter(root: vaxis.Window, supervisor: *Supervisor) void {
 
 fn renderHelp(root: vaxis.Window) void {
     const width: u16 = @min(root.width - 4, 64);
-    const height: u16 = 10;
+    const height: u16 = 11;
     const x: i17 = @intCast((root.width - width) / 2);
     const y: i17 = @intCast((root.height - height) / 2);
     const popup = root.child(.{
@@ -232,8 +294,9 @@ fn renderHelp(root: vaxis.Window) void {
     print(popup, 1, 4, "r               restart selected", style);
     print(popup, 1, 5, "a / x           start all / stop all", style);
     print(popup, 1, 6, "Tab             selected or all logs", style);
-    print(popup, 1, 7, "p               pause or resume log follow", style);
-    print(popup, 1, 8, "q or Ctrl+C     quit and stop children", style);
+    print(popup, 1, 7, "/ s f u         search, stream, process, clear", style);
+    print(popup, 1, 8, "p               pause or resume log follow", style);
+    print(popup, 1, 9, "q or Ctrl+C     quit and stop children", style);
 }
 
 fn print(window: vaxis.Window, col: u16, row: u16, text: []const u8, style: vaxis.Style) void {
@@ -284,6 +347,56 @@ fn lastResultAlloc(allocator: std.mem.Allocator, process: *const supervisor_mod.
         return allocator.dupe(u8, "err");
     }
     return allocator.dupe(u8, "exit=-");
+}
+
+fn filterSummaryAlloc(allocator: std.mem.Allocator, supervisor: *const Supervisor) ![]const u8 {
+    if (supervisor.input_mode == .search) {
+        return std.fmt.allocPrint(allocator, " | search: /{s}", .{supervisor.search_input.items});
+    }
+
+    var parts: std.ArrayList(u8) = .empty;
+    errdefer parts.deinit(allocator);
+    if (supervisor.filter_query) |query| {
+        try appendFmt(allocator, &parts, " query=\"{s}\"", .{query});
+    }
+    if (supervisor.filter_stream) |stream| {
+        try appendFmt(allocator, &parts, " stream={s}", .{@tagName(stream)});
+    }
+    if (supervisor.filter_process_id) |process_id| {
+        try appendFmt(allocator, &parts, " process={s}", .{processNameById(supervisor, process_id) orelse "?"});
+    }
+    if (parts.items.len == 0) return allocator.dupe(u8, "");
+    const owned = try parts.toOwnedSlice(allocator);
+    defer allocator.free(owned);
+    return std.fmt.allocPrint(allocator, " | filter:{s}", .{owned});
+}
+
+fn appendFmt(allocator: std.mem.Allocator, list: *std.ArrayList(u8), comptime fmt: []const u8, args: anytype) !void {
+    const text = try std.fmt.allocPrint(allocator, fmt, args);
+    defer allocator.free(text);
+    try list.appendSlice(allocator, text);
+}
+
+fn processNameById(supervisor: *const Supervisor, process_id: u32) ?[]const u8 {
+    for (supervisor.processes) |process| {
+        if (process.id == process_id) return process.spec.name;
+    }
+    return null;
+}
+
+fn logMatches(supervisor: *const Supervisor, line: log_store.LogLine) bool {
+    if (supervisor.filter_stream) |stream| {
+        if (line.stream != stream) return false;
+    }
+    if (supervisor.filter_process_id) |process_id| {
+        if (line.process_id != process_id) return false;
+    }
+    if (supervisor.filter_query) |query| {
+        if (std.mem.indexOf(u8, line.text, query) == null and std.mem.indexOf(u8, line.process_name, query) == null) {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn formatTimeAlloc(allocator: std.mem.Allocator, timestamp_ms: i64) ![]const u8 {
