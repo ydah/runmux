@@ -44,6 +44,8 @@ pub const RuntimeProcess = struct {
     restart_due_ms: ?i64 = null,
     stop_kill_due_ms: ?i64 = null,
     kill_sent: bool = false,
+    start_when_dependencies_ready: bool = false,
+    dependency_wait_logged: bool = false,
     stop_requested: bool = false,
     pending_manual_restart: bool = false,
     stdout_assembler: line_assembler.LineAssembler,
@@ -189,6 +191,9 @@ pub const Supervisor = struct {
                         self.appendSystem(process, "stop timeout reached; sent kill", .{}) catch {};
                     }
                 }
+            }
+            if (process.status == .pending and process.start_when_dependencies_ready and self.dependenciesReady(process)) {
+                self.startProcess(process);
             }
         }
     }
@@ -364,6 +369,8 @@ pub const Supervisor = struct {
         }
 
         process.status = .starting;
+        process.start_when_dependencies_ready = false;
+        process.dependency_wait_logged = false;
         process.stop_requested = false;
         process.pending_manual_restart = false;
         process.stop_kill_due_ms = null;
@@ -371,6 +378,16 @@ pub const Supervisor = struct {
         process.last_exit_code = null;
         process.last_signal = null;
         self.setLastError(process, null);
+
+        if (!self.dependenciesReady(process)) {
+            process.status = .pending;
+            process.start_when_dependencies_ready = true;
+            if (!process.dependency_wait_logged) {
+                self.appendSystem(process, "waiting for dependencies", .{}) catch {};
+                process.dependency_wait_logged = true;
+            }
+            return;
+        }
 
         const pid = process.runner.start(self.io, self.parent_env, process.spec) catch |err| {
             process.status = .failed;
@@ -398,9 +415,15 @@ pub const Supervisor = struct {
             .restarting => {
                 process.stop_requested = false;
                 process.pending_manual_restart = false;
+                process.start_when_dependencies_ready = false;
                 process.restart_due_ms = null;
                 process.status = .exited;
                 self.appendSystem(process, "restart canceled", .{}) catch {};
+            },
+            .pending => {
+                process.start_when_dependencies_ready = false;
+                process.status = .exited;
+                self.appendSystem(process, "start canceled", .{}) catch {};
             },
             else => {},
         }
@@ -517,8 +540,29 @@ pub const Supervisor = struct {
         return &self.processes[@intCast(id)];
     }
 
+    fn processByName(self: *Supervisor, name: []const u8) ?*RuntimeProcess {
+        for (self.processes) |*process| {
+            if (std.mem.eql(u8, process.spec.name, name)) return process;
+        }
+        return null;
+    }
+
     fn refreshPausedLogEnd(self: *Supervisor) void {
         if (self.paused) self.paused_log_end = self.currentLogCount();
+    }
+
+    fn dependenciesReady(self: *Supervisor, process: *const RuntimeProcess) bool {
+        for (process.spec.depends_on) |dependency_name| {
+            const dependency = self.processByName(dependency_name) orelse return false;
+            switch (dependency.status) {
+                .running => {},
+                .exited => {
+                    if (dependency.last_exit_code == null or dependency.last_exit_code.? != 0) return false;
+                },
+                else => return false,
+            }
+        }
+        return true;
     }
 
     fn handleCriticalFailure(self: *Supervisor, process: *RuntimeProcess) bool {

@@ -69,6 +69,15 @@ jobs:
           set -e
           test "$status" -eq 4
 
+      - name: Smoke test dependency wait
+        run: |
+          set -euo pipefail
+          output="$(zig-out/bin/runmux run --plain --config testdata/dependency.runmux.json 2>&1)"
+          printf '%s\n' "$output"
+          grep -F "[setup:stdout] ready" <<<"$output"
+          grep -F "[app:system] waiting for dependencies" <<<"$output"
+          grep -F "[app:stdout] app" <<<"$output"
+
       - name: Smoke test invalid config
         run: |
           set -euo pipefail

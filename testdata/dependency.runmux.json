@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "app",
+          "argv": ["/bin/sh", "-c", "printf 'app\\n'"],
+          "depends_on": ["setup"]
+        },
+        {
+          "name": "setup",
+          "argv": ["/bin/sh", "-c", "printf 'ready\\n'"]
+        }
+      ]
+    }
+  ]
+}

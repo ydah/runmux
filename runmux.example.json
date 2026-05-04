@@ -30,6 +30,7 @@
         {
           "name": "manual",
           "cmd": "echo manual process; sleep 5",
+          "depends_on": ["clock"],
           "autostart": false
         }
       ]

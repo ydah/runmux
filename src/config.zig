@@ -28,6 +28,7 @@ pub const ProcessSpec = struct {
     name: []const u8,
     cmd: ?[]const u8,
     argv: []const []const u8,
+    depends_on: []const []const u8,
     cwd: []const u8,
     env: []const EnvVar,
     shell: bool,
@@ -86,6 +87,7 @@ const RawProcessSpec = struct {
     name: []const u8,
     cmd: ?[]const u8 = null,
     argv: ?[]const []const u8 = null,
+    depends_on: ?[]const []const u8 = null,
     cwd: ?[]const u8 = null,
     env: ?std.json.Value = null,
     shell: ?bool = null,
@@ -114,6 +116,7 @@ pub const LoadedConfig = struct {
     pub fn deinit(self: *LoadedConfig) void {
         for (self.profile.processes) |process| {
             self.allocator.free(process.argv);
+            self.allocator.free(process.depends_on);
             self.allocator.free(process.env);
         }
         self.allocator.free(self.profile.processes);
@@ -154,6 +157,7 @@ pub fn parseAndResolveString(
     errdefer {
         for (profile.processes) |process| {
             allocator.free(process.argv);
+            allocator.free(process.depends_on);
             allocator.free(process.env);
         }
         allocator.free(profile.processes);
@@ -200,6 +204,7 @@ fn resolve(
     if (raw_profile.processes.len == 0) {
         return diagnostics.fail("config error: profile \"{s}\": processes must not be empty", .{raw_profile.name});
     }
+    try validateDependencyGraph(allocator, raw_profile.name, raw_profile.processes, diagnostics);
 
     const defaults = applyDefaults(raw.defaults);
     var processes = try allocator.alloc(ProcessSpec, raw_profile.processes.len);
@@ -214,6 +219,7 @@ fn resolve(
             io,
             raw_profile.name,
             raw_process,
+            raw_profile.processes,
             defaults,
             &process_names,
             diagnostics,
@@ -251,6 +257,7 @@ fn resolveProcess(
     io: std.Io,
     profile_name: []const u8,
     raw: RawProcessSpec,
+    raw_processes: []RawProcessSpec,
     defaults: Defaults,
     process_names: *std.StringHashMap(void),
     diagnostics: *Diagnostics,
@@ -289,6 +296,35 @@ fn resolveProcess(
     } else try allocator.alloc([]const u8, 0);
     errdefer allocator.free(argv);
 
+    const depends_on = if (raw.depends_on) |source| blk: {
+        const copy = try allocator.alloc([]const u8, source.len);
+        errdefer allocator.free(copy);
+        for (source, 0..) |dependency, dependency_index| {
+            if (dependency.len == 0) {
+                return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": depends_on must not contain empty names", .{
+                    profile_name,
+                    raw.name,
+                });
+            }
+            if (std.mem.eql(u8, dependency, raw.name)) {
+                return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": depends_on cannot include itself", .{
+                    profile_name,
+                    raw.name,
+                });
+            }
+            if (!rawProcessExists(raw_processes, dependency)) {
+                return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": dependency \"{s}\" not found", .{
+                    profile_name,
+                    raw.name,
+                    dependency,
+                });
+            }
+            copy[dependency_index] = dependency;
+        }
+        break :blk copy;
+    } else try allocator.alloc([]const u8, 0);
+    errdefer allocator.free(depends_on);
+
     const restart = if (raw.restart) |restart|
         mergeRestart(defaults.restart, restart) catch {
             return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": invalid restart policy", .{
@@ -326,6 +362,7 @@ fn resolveProcess(
         .name = raw.name,
         .cmd = raw.cmd,
         .argv = argv,
+        .depends_on = depends_on,
         .cwd = cwd,
         .env = env,
         .shell = shell,
@@ -344,6 +381,73 @@ fn containsAsciiWhitespace(value: []const u8) bool {
         }
     }
     return false;
+}
+
+fn rawProcessExists(processes: []RawProcessSpec, name: []const u8) bool {
+    for (processes) |process| {
+        if (std.mem.eql(u8, process.name, name)) return true;
+    }
+    return false;
+}
+
+const DependencyVisit = enum {
+    none,
+    visiting,
+    visited,
+};
+
+fn validateDependencyGraph(
+    allocator: std.mem.Allocator,
+    profile_name: []const u8,
+    processes: []RawProcessSpec,
+    diagnostics: *Diagnostics,
+) !void {
+    const visits = try allocator.alloc(DependencyVisit, processes.len);
+    defer allocator.free(visits);
+    @memset(visits, .none);
+
+    for (processes, 0..) |_, index| {
+        try visitDependency(profile_name, processes, index, visits, diagnostics);
+    }
+}
+
+fn visitDependency(
+    profile_name: []const u8,
+    processes: []RawProcessSpec,
+    index: usize,
+    visits: []DependencyVisit,
+    diagnostics: *Diagnostics,
+) !void {
+    switch (visits[index]) {
+        .visited => return,
+        .visiting => return diagnostics.fail("config error: profile \"{s}\": dependency cycle includes process \"{s}\"", .{
+            profile_name,
+            processes[index].name,
+        }),
+        .none => {},
+    }
+
+    visits[index] = .visiting;
+    if (processes[index].depends_on) |dependencies| {
+        for (dependencies) |dependency| {
+            const dependency_index = rawProcessIndex(processes, dependency) orelse {
+                return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": dependency \"{s}\" not found", .{
+                    profile_name,
+                    processes[index].name,
+                    dependency,
+                });
+            };
+            try visitDependency(profile_name, processes, dependency_index, visits, diagnostics);
+        }
+    }
+    visits[index] = .visited;
+}
+
+fn rawProcessIndex(processes: []RawProcessSpec, name: []const u8) ?usize {
+    for (processes, 0..) |process, index| {
+        if (std.mem.eql(u8, process.name, name)) return index;
+    }
+    return null;
 }
 
 fn resolveEnv(
@@ -474,6 +578,7 @@ pub const sample_config =
     \\        {
     \\          "name": "manual",
     \\          "cmd": "echo manual process; sleep 5",
+    \\          "depends_on": ["clock"],
     \\          "autostart": false
     \\        }
     \\      ]
@@ -541,6 +646,41 @@ test "config_applies_defaults" {
     try std.testing.expectEqual(RestartPolicy.on_failure, process.restart.policy);
     try std.testing.expectEqual(@as(u32, 2), process.restart.max_restarts);
     try std.testing.expectEqual(@as(u32, 12), process.log.max_lines);
+}
+
+test "config_resolves_dependencies" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"db","cmd":"echo db"},{"name":"api","cmd":"echo api","depends_on":["db"]}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    var loaded = try parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics);
+    defer loaded.deinit();
+
+    try std.testing.expectEqualStrings("db", loaded.profile.processes[1].depends_on[0]);
+}
+
+test "config_rejects_unknown_dependency" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"api","cmd":"echo api","depends_on":["db"]}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "dependency") != null);
+}
+
+test "config_rejects_dependency_cycle" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"api","cmd":"echo api","depends_on":["web"]},{"name":"web","cmd":"echo web","depends_on":["api"]}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "cycle") != null);
 }
 
 test "config_rejects_shell_false_cmd_with_whitespace" {
