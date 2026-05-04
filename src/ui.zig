@@ -284,7 +284,7 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
         print(log_window, 0, row, prefix, streamStyle(line.stream, true));
         const prefix_width: u16 = @intCast(@min(prefix.len, @as(usize, log_window.width)));
         if (prefix_width < log_window.width) {
-            print(log_window, prefix_width, row, line.text, streamStyle(line.stream, false));
+            try printAnsi(allocator, log_window, prefix_width, row, line.text, streamStyle(line.stream, false));
         }
         row += 1;
     }
@@ -345,6 +345,101 @@ fn print(window: vaxis.Window, col: u16, row: u16, text: []const u8, style: vaxi
         .col_offset = col,
         .wrap = .none,
     });
+}
+
+fn printAnsi(
+    allocator: std.mem.Allocator,
+    window: vaxis.Window,
+    col: u16,
+    row: u16,
+    text: []const u8,
+    base_style: vaxis.Style,
+) !void {
+    if (row >= window.height or col >= window.width) return;
+
+    var segments: std.ArrayList(vaxis.Segment) = .empty;
+    defer segments.deinit(allocator);
+
+    var style = base_style;
+    var chunk_start: usize = 0;
+    var index: usize = 0;
+    while (index < text.len) {
+        if (text[index] != 0x1b) {
+            index += 1;
+            continue;
+        }
+
+        if (chunk_start < index) {
+            try segments.append(allocator, .{ .text = text[chunk_start..index], .style = style });
+        }
+        index = consumeAnsi(text, index, base_style, &style);
+        chunk_start = index;
+    }
+    if (chunk_start < text.len) {
+        try segments.append(allocator, .{ .text = text[chunk_start..], .style = style });
+    }
+    if (segments.items.len == 0) return;
+
+    _ = window.print(segments.items, .{
+        .row_offset = row,
+        .col_offset = col,
+        .wrap = .none,
+    });
+}
+
+fn consumeAnsi(text: []const u8, start: usize, base_style: vaxis.Style, style: *vaxis.Style) usize {
+    if (start + 1 >= text.len) return start + 1;
+    if (text[start + 1] != '[') return start + 2;
+
+    var end = start + 2;
+    while (end < text.len) : (end += 1) {
+        const byte = text[end];
+        if (byte >= 0x40 and byte <= 0x7e) break;
+    }
+    if (end >= text.len) return text.len;
+    if (text[end] == 'm') applySgr(text[start + 2 .. end], base_style, style);
+    return end + 1;
+}
+
+fn applySgr(params: []const u8, base_style: vaxis.Style, style: *vaxis.Style) void {
+    if (params.len == 0) {
+        style.* = base_style;
+        return;
+    }
+
+    var index: usize = 0;
+    while (index <= params.len) {
+        const end = std.mem.indexOfScalarPos(u8, params, index, ';') orelse params.len;
+        const code = if (end == index) 0 else std.fmt.parseInt(u16, params[index..end], 10) catch 0;
+        applySgrCode(code, base_style, style);
+        if (end == params.len) break;
+        index = end + 1;
+    }
+}
+
+fn applySgrCode(code: u16, base_style: vaxis.Style, style: *vaxis.Style) void {
+    switch (code) {
+        0 => style.* = base_style,
+        1 => style.bold = true,
+        2 => style.dim = true,
+        3 => style.italic = true,
+        4 => style.ul_style = .single,
+        7 => style.reverse = true,
+        22 => {
+            style.bold = false;
+            style.dim = false;
+        },
+        23 => style.italic = false,
+        24 => style.ul_style = .off,
+        27 => style.reverse = false,
+        30...37 => style.fg = .{ .index = @intCast(code - 30) },
+        39 => style.fg = .default,
+        40...47 => style.bg = .{ .index = @intCast(code - 40) },
+        49 => style.bg = .default,
+        90...97 => style.fg = .{ .index = @intCast((code - 90) + 8) },
+        100...107 => style.bg = .{ .index = @intCast((code - 100) + 8) },
+        else => {},
+    }
 }
 
 fn statusGlyph(status: supervisor_mod.ProcessStatus) []const u8 {
