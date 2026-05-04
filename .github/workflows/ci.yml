@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Zig 0.16.0 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Check formatting
+        run: zig fmt --check build.zig build.zig.zon src
+
+      - name: Fetch dependencies
+        run: zig build --fetch
+
+      - name: Build
+        run: zig build
+
+      - name: Test
+        run: zig build test
+
+      - name: Smoke test CLI
+        run: |
+          set -euo pipefail
+          zig-out/bin/runmux --version
+          zig-out/bin/runmux --help
+          zig-out/bin/runmux check --config runmux.example.json
+          zig-out/bin/runmux list --config runmux.example.json
+
+      - name: Smoke test invalid config
+        run: |
+          set -euo pipefail
+          set +e
+          zig-out/bin/runmux check --config testdata/invalid_cmd_and_argv.runmux.json
+          status=$?
+          set -e
+          test "$status" -eq 2
