@@ -3,6 +3,7 @@ const vaxis = @import("vaxis");
 const config = @import("config.zig");
 const log_store = @import("log_store.zig");
 const supervisor_mod = @import("supervisor.zig");
+const ui_snapshot = @import("ui_snapshot.zig");
 
 const Supervisor = supervisor_mod.Supervisor;
 const Theme = supervisor_mod.Theme;
@@ -233,18 +234,18 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
     for (supervisor.processes, 0..) |*process, index| {
         if (row >= top + content_height) break;
         const selected = index == supervisor.selected_index;
-        const pid_text = if (process.pid) |pid| try std.fmt.allocPrint(allocator, "{d}", .{pid}) else "-";
         const last_text = try lastResultAlloc(allocator, process);
-        const line = try std.fmt.allocPrint(allocator, "{s} {s}{s} {s:<12} {s:<10} pid={s} r={d} {s}", .{
-            if (selected) ">" else " ",
-            statusGlyph(process.status),
-            if (process.spec.critical) "!" else " ",
-            process.spec.name,
-            @tagName(process.status),
-            pid_text,
-            process.restart_count,
-            last_text,
+        defer allocator.free(last_text);
+        const line = try ui_snapshot.formatProcessRow(allocator, .{
+            .selected = selected,
+            .status = process.status,
+            .critical = process.spec.critical,
+            .name = process.spec.name,
+            .pid = process.pid,
+            .restart_count = process.restart_count,
+            .last_result = last_text,
         });
+        defer allocator.free(line);
         print(process_window, 0, row, line, if (selected) .{ .reverse = true, .bold = true } else statusStyle(process.status, supervisor.options.theme));
         row += 1;
     }
@@ -275,12 +276,8 @@ fn renderPanes(root: vaxis.Window, allocator: std.mem.Allocator, supervisor: *Su
     row = top;
     for (visible_logs[start..end]) |line| {
         if (row >= top + content_height) break;
-        const time_text = try formatTimeAlloc(allocator, line.timestamp_ms);
-        const prefix = try std.fmt.allocPrint(allocator, "{s} [{s}:{s}] ", .{
-            time_text,
-            line.process_name,
-            @tagName(line.stream),
-        });
+        const prefix = try ui_snapshot.formatLogPrefix(allocator, line);
+        defer allocator.free(prefix);
         print(log_window, 0, row, prefix, streamStyle(line.stream, true));
         const prefix_width: u16 = @intCast(@min(prefix.len, @as(usize, log_window.width)));
         if (prefix_width < log_window.width) {
@@ -490,16 +487,6 @@ test "ui_apply_sgr_extended_colors" {
     }
 }
 
-fn statusGlyph(status: supervisor_mod.ProcessStatus) []const u8 {
-    return switch (status) {
-        .pending, .disabled, .exited => "o",
-        .starting, .stopping => "~",
-        .running => "*",
-        .failed => "!",
-        .restarting => "R",
-    };
-}
-
 fn statusStyle(status: supervisor_mod.ProcessStatus, theme: Theme) vaxis.Style {
     if (theme == .mono) {
         return switch (status) {
@@ -588,16 +575,4 @@ fn logMatches(supervisor: *const Supervisor, line: log_store.LogLine) bool {
         }
     }
     return true;
-}
-
-fn formatTimeAlloc(allocator: std.mem.Allocator, timestamp_ms: i64) ![]const u8 {
-    const total_seconds: i64 = @mod(@divFloor(timestamp_ms, 1000), 24 * 60 * 60);
-    const hour = @divFloor(total_seconds, 3600);
-    const minute = @divFloor(@mod(total_seconds, 3600), 60);
-    const second = @mod(total_seconds, 60);
-    return std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}:{d:0>2}", .{
-        @as(u8, @intCast(hour)),
-        @as(u8, @intCast(minute)),
-        @as(u8, @intCast(second)),
-    });
 }

@@ -11,6 +11,7 @@ pub const ring_buffer = @import("ring_buffer.zig");
 pub const supervisor = @import("supervisor.zig");
 pub const toml_config = @import("toml_config.zig");
 pub const ui = @import("ui.zig");
+pub const ui_snapshot = @import("ui_snapshot.zig");
 
 test {
     _ = ansi_sanitize;
@@ -26,4 +27,5 @@ test {
     _ = supervisor;
     _ = toml_config;
     _ = ui;
+    _ = ui_snapshot;
 }
