@@ -4,6 +4,7 @@ const config = @import("config.zig");
 const event_queue = @import("event_queue.zig");
 const line_assembler = @import("line_assembler.zig");
 const log_store = @import("log_store.zig");
+const platform = @import("platform.zig");
 const process_runner = @import("process_runner.zig");
 
 pub const ProcessStatus = enum {
@@ -27,6 +28,13 @@ pub const InputMode = enum {
     search,
 };
 
+pub const HealthStatus = enum {
+    none,
+    checking,
+    healthy,
+    unhealthy,
+};
+
 pub const Options = struct {
     log_dir: ?[]const u8 = null,
     exit_on_critical_failure: bool = false,
@@ -46,6 +54,9 @@ pub const RuntimeProcess = struct {
     kill_sent: bool = false,
     start_when_dependencies_ready: bool = false,
     dependency_wait_logged: bool = false,
+    health_status: HealthStatus = .none,
+    health_attempts: u32 = 0,
+    next_health_check_ms: ?i64 = null,
     stop_requested: bool = false,
     pending_manual_restart: bool = false,
     stdout_assembler: line_assembler.LineAssembler,
@@ -194,6 +205,11 @@ pub const Supervisor = struct {
             }
             if (process.status == .pending and process.start_when_dependencies_ready and self.dependenciesReady(process)) {
                 self.startProcess(process);
+            }
+            if (process.status == .running and process.health_status == .checking) {
+                if (process.next_health_check_ms) |due| {
+                    if (now >= due) self.runHealthCheck(process, now);
+                }
             }
         }
     }
@@ -371,6 +387,9 @@ pub const Supervisor = struct {
         process.status = .starting;
         process.start_when_dependencies_ready = false;
         process.dependency_wait_logged = false;
+        process.health_status = .none;
+        process.health_attempts = 0;
+        process.next_health_check_ms = null;
         process.stop_requested = false;
         process.pending_manual_restart = false;
         process.stop_kill_due_ms = null;
@@ -400,6 +419,11 @@ pub const Supervisor = struct {
         process.pid = @import("platform.zig").pidToU64(pid);
         process.status = .running;
         self.appendSystem(process, "started pid={d}", .{process.pid.?}) catch {};
+        if (process.spec.health != null) {
+            process.health_status = .checking;
+            process.next_health_check_ms = nowMs(self.io);
+            self.appendSystem(process, "health checking", .{}) catch {};
+        }
     }
 
     fn stopProcess(self: *Supervisor, process: *RuntimeProcess) void {
@@ -555,7 +579,9 @@ pub const Supervisor = struct {
         for (process.spec.depends_on) |dependency_name| {
             const dependency = self.processByName(dependency_name) orelse return false;
             switch (dependency.status) {
-                .running => {},
+                .running => {
+                    if (dependency.spec.health != null and dependency.health_status != .healthy) return false;
+                },
                 .exited => {
                     if (dependency.last_exit_code == null or dependency.last_exit_code.? != 0) return false;
                 },
@@ -563,6 +589,69 @@ pub const Supervisor = struct {
             }
         }
         return true;
+    }
+
+    fn runHealthCheck(self: *Supervisor, process: *RuntimeProcess, now: i64) void {
+        const healthy = self.executeHealthCheck(process) catch |err| blk: {
+            self.setLastError(process, @errorName(err));
+            break :blk false;
+        };
+        if (healthy) {
+            process.health_status = .healthy;
+            process.next_health_check_ms = null;
+            self.appendSystem(process, "health ok", .{}) catch {};
+            return;
+        }
+
+        process.health_attempts += 1;
+        const health = process.spec.health.?;
+        if (process.health_attempts < health.retries) {
+            process.next_health_check_ms = now + @as(i64, @intCast(health.interval_ms));
+            self.appendSystem(process, "health check failed; retrying {d}/{d}", .{
+                process.health_attempts,
+                health.retries,
+            }) catch {};
+            return;
+        }
+
+        process.health_status = .unhealthy;
+        process.next_health_check_ms = null;
+        self.setLastError(process, "health check failed");
+        self.appendSystem(process, "health check failed; stopping", .{}) catch {};
+        process.status = .stopping;
+        process.stop_kill_due_ms = now + 2000;
+        process.kill_sent = false;
+        process.runner.stop();
+    }
+
+    fn executeHealthCheck(self: *Supervisor, process: *const RuntimeProcess) !bool {
+        const health = process.spec.health.?;
+        var env = try self.parent_env.clone(self.allocator);
+        defer env.deinit();
+        for (process.spec.env) |entry| {
+            try env.put(entry.key, entry.value);
+        }
+
+        const argv = if (health.cmd) |cmd|
+            try platform.shellArgv(self.allocator, cmd, self.parent_env.get("SHELL") orelse "/bin/sh")
+        else
+            health.argv;
+        defer if (health.cmd != null) self.allocator.free(argv);
+
+        var child = try std.process.spawn(self.io, .{
+            .argv = argv,
+            .cwd = .{ .path = process.spec.cwd },
+            .environ_map = &env,
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+            .pgid = platform.childProcessGroupId(),
+        });
+        const term = try child.wait(self.io);
+        return switch (term) {
+            .exited => |code| code == 0,
+            else => false,
+        };
     }
 
     fn handleCriticalFailure(self: *Supervisor, process: *RuntimeProcess) bool {

@@ -19,6 +19,13 @@ pub const LogSpec = struct {
     strip_ansi: bool = true,
 };
 
+pub const HealthSpec = struct {
+    cmd: ?[]const u8,
+    argv: []const []const u8,
+    interval_ms: u32 = 1000,
+    retries: u32 = 30,
+};
+
 pub const EnvVar = struct {
     key: []const u8,
     value: []const u8,
@@ -36,6 +43,7 @@ pub const ProcessSpec = struct {
     critical: bool,
     restart: RestartSpec,
     log: LogSpec,
+    health: ?HealthSpec,
 };
 
 pub const ResolvedProfile = struct {
@@ -95,6 +103,7 @@ const RawProcessSpec = struct {
     critical: ?bool = null,
     restart: ?RawRestartSpec = null,
     log: ?RawLogSpec = null,
+    health: ?RawHealthSpec = null,
 };
 
 const RawRestartSpec = struct {
@@ -108,6 +117,13 @@ const RawLogSpec = struct {
     strip_ansi: ?bool = null,
 };
 
+const RawHealthSpec = struct {
+    cmd: ?[]const u8 = null,
+    argv: ?[]const []const u8 = null,
+    interval_ms: ?u32 = null,
+    retries: ?u32 = null,
+};
+
 pub const LoadedConfig = struct {
     allocator: std.mem.Allocator,
     parsed: std.json.Parsed(RawConfig),
@@ -117,6 +133,7 @@ pub const LoadedConfig = struct {
         for (self.profile.processes) |process| {
             self.allocator.free(process.argv);
             self.allocator.free(process.depends_on);
+            freeHealth(self.allocator, process.health);
             self.allocator.free(process.env);
         }
         self.allocator.free(self.profile.processes);
@@ -158,6 +175,7 @@ pub fn parseAndResolveString(
         for (profile.processes) |process| {
             allocator.free(process.argv);
             allocator.free(process.depends_on);
+            freeHealth(allocator, process.health);
             allocator.free(process.env);
         }
         allocator.free(profile.processes);
@@ -343,6 +361,9 @@ fn resolveProcess(
         });
     }
 
+    const health = try resolveHealth(allocator, profile_name, raw.name, raw.health, diagnostics);
+    errdefer freeHealth(allocator, health);
+
     const env = try resolveEnv(allocator, profile_name, raw.name, raw.env, diagnostics);
     errdefer allocator.free(env);
 
@@ -370,6 +391,7 @@ fn resolveProcess(
         .critical = raw.critical orelse false,
         .restart = restart,
         .log = log,
+        .health = health,
     };
 }
 
@@ -448,6 +470,63 @@ fn rawProcessIndex(processes: []RawProcessSpec, name: []const u8) ?usize {
         if (std.mem.eql(u8, process.name, name)) return index;
     }
     return null;
+}
+
+fn resolveHealth(
+    allocator: std.mem.Allocator,
+    profile_name: []const u8,
+    process_name: []const u8,
+    raw: ?RawHealthSpec,
+    diagnostics: *Diagnostics,
+) !?HealthSpec {
+    const raw_health = raw orelse return null;
+    const has_cmd = raw_health.cmd != null;
+    const has_argv = raw_health.argv != null;
+    if (has_cmd == has_argv) {
+        return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": health requires exactly one of cmd or argv", .{
+            profile_name,
+            process_name,
+        });
+    }
+
+    const argv = if (raw_health.argv) |source| blk: {
+        if (source.len == 0) {
+            return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": health.argv must not be empty", .{
+                profile_name,
+                process_name,
+            });
+        }
+        const copy = try allocator.alloc([]const u8, source.len);
+        @memcpy(copy, source);
+        break :blk copy;
+    } else try allocator.alloc([]const u8, 0);
+    errdefer allocator.free(argv);
+
+    const interval_ms = raw_health.interval_ms orelse 1000;
+    if (interval_ms == 0) {
+        return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": health.interval_ms must be at least 1", .{
+            profile_name,
+            process_name,
+        });
+    }
+    const retries = raw_health.retries orelse 30;
+    if (retries == 0) {
+        return diagnostics.fail("config error: profile \"{s}\", process \"{s}\": health.retries must be at least 1", .{
+            profile_name,
+            process_name,
+        });
+    }
+
+    return .{
+        .cmd = raw_health.cmd,
+        .argv = argv,
+        .interval_ms = interval_ms,
+        .retries = retries,
+    };
+}
+
+fn freeHealth(allocator: std.mem.Allocator, health: ?HealthSpec) void {
+    if (health) |spec| allocator.free(spec.argv);
 }
 
 fn resolveEnv(
@@ -579,6 +658,11 @@ pub const sample_config =
     \\          "name": "manual",
     \\          "cmd": "echo manual process; sleep 5",
     \\          "depends_on": ["clock"],
+    \\          "health": {
+    \\            "argv": ["/bin/sh", "-c", "exit 0"],
+    \\            "interval_ms": 1000,
+    \\            "retries": 3
+    \\          },
     \\          "autostart": false
     \\        }
     \\      ]
@@ -681,6 +765,33 @@ test "config_rejects_dependency_cycle" {
     defer diagnostics.deinit();
     try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
     try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "cycle") != null);
+}
+
+test "config_resolves_health_check" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"api","cmd":"sleep 1","health":{"argv":["/bin/sh","-c","exit 0"],"interval_ms":10,"retries":2}}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    var loaded = try parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics);
+    defer loaded.deinit();
+
+    const health = loaded.profile.processes[0].health.?;
+    try std.testing.expectEqual(@as(u32, 10), health.interval_ms);
+    try std.testing.expectEqual(@as(u32, 2), health.retries);
+    try std.testing.expectEqualStrings("/bin/sh", health.argv[0]);
+}
+
+test "config_rejects_invalid_health_check" {
+    const data =
+        \\{"version":1,"default_profile":"dev","profiles":[{"name":"dev","processes":[
+        \\{"name":"api","cmd":"sleep 1","health":{"interval_ms":0}}]}]}
+    ;
+    var diagnostics = Diagnostics.init(std.testing.allocator);
+    defer diagnostics.deinit();
+    try std.testing.expectError(error.ConfigInvalid, parseAndResolveString(std.testing.allocator, std.testing.io, data, null, &diagnostics));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.message.?, "health") != null);
 }
 
 test "config_rejects_shell_false_cmd_with_whitespace" {

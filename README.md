@@ -70,6 +70,11 @@ The default config file is `runmux.json`.
           "name": "manual",
           "cmd": "echo manual process; sleep 5",
           "depends_on": ["clock"],
+          "health": {
+            "argv": ["/bin/sh", "-c", "exit 0"],
+            "interval_ms": 1000,
+            "retries": 3
+          },
           "autostart": false
         }
       ]
@@ -78,7 +83,7 @@ The default config file is `runmux.json`.
 }
 ```
 
-Each process must set exactly one of `cmd` or `argv`. `cmd` runs through the shell by default. If `shell` is set to `false`, `cmd` must be a single executable path with no arguments; use `argv` for direct execution with arguments. Set `depends_on` to delay a process until dependencies are running or have exited successfully.
+Each process must set exactly one of `cmd` or `argv`. `cmd` runs through the shell by default. If `shell` is set to `false`, `cmd` must be a single executable path with no arguments; use `argv` for direct execution with arguments. Set `depends_on` to delay a process until dependencies are ready. A dependency is ready when it is running with no health check, has passed its health check, or has exited successfully.
 
 ## TUI Keys
 

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "app",
+          "argv": ["/bin/sh", "-c", "printf 'app\\n'"],
+          "depends_on": ["db"]
+        },
+        {
+          "name": "db",
+          "argv": ["/bin/sh", "-c", "sleep 0.2"],
+          "health": {
+            "argv": ["/bin/sh", "-c", "exit 0"],
+            "interval_ms": 10,
+            "retries": 3
+          }
+        }
+      ]
+    }
+  ]
+}
