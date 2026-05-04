@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "defaults": {
+    "cwd": ".",
+    "shell": true,
+    "autostart": true,
+    "restart": {
+      "policy": "never",
+      "max_restarts": 0,
+      "delay_ms": 1000
+    },
+    "log": {
+      "max_lines": 1000,
+      "strip_ansi": true
+    }
+  },
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "clock",
+          "cmd": "while true; do date; sleep 1; done"
+        },
+        {
+          "name": "stderr-demo",
+          "cmd": "while true; do echo warn >&2; sleep 2; done"
+        },
+        {
+          "name": "manual",
+          "cmd": "echo manual process; sleep 5",
+          "autostart": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "default_profile": "dev",
+  "profiles": [
+    {
+      "name": "dev",
+      "processes": [
+        {
+          "name": "api",
+          "cmd": "echo api"
+        }
+      ]
+    }
+  ]
+}

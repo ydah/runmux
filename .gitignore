@@ -1,0 +1,15 @@
+/.idea/
+/.vscode/
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.DS_Store
+.zig-cache/
+zig-cache/
+zig-out/
+zig-pkg/
+build/
+build-*/
+docgen_tmp/
