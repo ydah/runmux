@@ -21,15 +21,25 @@ pub fn main(init: std.process.Init) !void {
     switch (parsed.command) {
         .help => try printOut(io, "{s}", .{cli.help_text}),
         .version => try printOut(io, "runmux {s}\n", .{cli.version}),
-        .init => try commandInit(io, parsed.config_path),
+        .init => try commandInit(io, parsed.config_path, parsed.force),
         .check => try commandCheck(allocator, io, parsed.config_path, parsed.profile_name),
         .list => try commandList(allocator, io, parsed.config_path, parsed.profile_name),
         .run => try commandRun(allocator, io, init.environ_map, parsed.config_path, parsed.profile_name, parsed.plain, parsed.log_dir, parsed.exit_on_critical_failure, parsed.theme_name),
     }
 }
 
-fn commandInit(io: std.Io, path: []const u8) !void {
+fn commandInit(io: std.Io, path: []const u8, force: bool) !void {
     const cwd = std.Io.Dir.cwd();
+    if (force) {
+        try cwd.writeFile(io, .{
+            .sub_path = path,
+            .data = config.sample_config,
+            .flags = .{},
+        });
+        try printOut(io, "wrote {s}\n", .{path});
+        return;
+    }
+
     cwd.access(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             try cwd.writeFile(io, .{
@@ -86,14 +96,60 @@ fn commandList(
 
     try printOut(io, "profile {s}\n", .{loaded.profile.name});
     for (loaded.profile.processes) |process| {
-        const command = process.cmd orelse if (process.argv.len > 0) process.argv[0] else "";
-        try printOut(io, "- {s}: {s} cwd={s} autostart={} restart={s}\n", .{
-            process.name,
-            command,
-            process.cwd,
-            process.autostart,
+        try printOut(io, "- {s}\n", .{process.name});
+        if (process.cmd) |cmd| {
+            try printOut(io, "  cmd: {s}\n", .{cmd});
+        } else {
+            const argv_text = try stringArrayDisplayAlloc(allocator, process.argv);
+            defer allocator.free(argv_text);
+            try printOut(io, "  argv: {s}\n", .{argv_text});
+        }
+
+        try printOut(io, "  cwd: {s}\n", .{process.cwd});
+        try printOut(io, "  autostart: {}\n", .{process.autostart});
+        try printOut(io, "  critical: {}\n", .{process.critical});
+        try printOut(io, "  shell: {}\n", .{process.shell});
+        try printOut(io, "  dependency_failure: {s}\n", .{@tagName(process.dependency_failure)});
+
+        if (process.depends_on.len > 0) {
+            const dependencies = try stringArrayDisplayAlloc(allocator, process.depends_on);
+            defer allocator.free(dependencies);
+            try printOut(io, "  depends_on: {s}\n", .{dependencies});
+        } else {
+            try printOut(io, "  depends_on: []\n", .{});
+        }
+
+        try printOut(io, "  restart: policy={s} max_restarts={d} delay_ms={d}\n", .{
             @tagName(process.restart.policy),
+            process.restart.max_restarts,
+            process.restart.delay_ms,
         });
+        try printOut(io, "  log: max_lines={d} strip_ansi={}\n", .{
+            process.log.max_lines,
+            process.log.strip_ansi,
+        });
+
+        if (process.health) |health| {
+            if (health.cmd) |cmd| {
+                try printOut(io, "  health: cmd={s} interval_ms={d} timeout_ms={d} retries={d}\n", .{
+                    cmd,
+                    health.interval_ms,
+                    health.timeout_ms,
+                    health.retries,
+                });
+            } else {
+                const argv_text = try stringArrayDisplayAlloc(allocator, health.argv);
+                defer allocator.free(argv_text);
+                try printOut(io, "  health: argv={s} interval_ms={d} timeout_ms={d} retries={d}\n", .{
+                    argv_text,
+                    health.interval_ms,
+                    health.timeout_ms,
+                    health.retries,
+                });
+            }
+        } else {
+            try printOut(io, "  health: none\n", .{});
+        }
     }
 }
 
@@ -173,4 +229,38 @@ fn printErr(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
     var writer = std.Io.File.stderr().writer(io, &buffer);
     try writer.interface.print(fmt, args);
     try writer.interface.flush();
+}
+
+fn stringArrayDisplayAlloc(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    try out.append(allocator, '[');
+    for (items, 0..) |item, index| {
+        if (index > 0) try out.appendSlice(allocator, ", ");
+        try appendQuotedDisplay(allocator, &out, item);
+    }
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
+}
+
+fn appendQuotedDisplay(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+    try out.append(allocator, '"');
+    for (value) |byte| {
+        switch (byte) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            else => try out.append(allocator, byte),
+        }
+    }
+    try out.append(allocator, '"');
+}
+
+test "string_array_display_quotes_values" {
+    const text = try stringArrayDisplayAlloc(std.testing.allocator, &.{ "run", "say \"hi\"", "a\\b" });
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings("[\"run\", \"say \\\"hi\\\"\", \"a\\\\b\"]", text);
 }

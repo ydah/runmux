@@ -56,7 +56,18 @@ jobs:
           "$exe" --version
           "$exe" --help
           "$exe" check --config runmux.example.json
-          "$exe" list --config runmux.example.json
+          list_output="$("$exe" list --config runmux.example.json)"
+          printf '%s\n' "$list_output"
+          grep -F "dependency_failure: ignore" <<<"$list_output"
+          grep -F "health: argv=" <<<"$list_output"
+          init_dir="$(mktemp -d)"
+          "$exe" init --config "$init_dir/runmux.json"
+          set +e
+          "$exe" init --config "$init_dir/runmux.json"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          "$exe" init --config "$init_dir/runmux.json" --force
 
       - name: Smoke test plain mode
         if: runner.os != 'Windows'

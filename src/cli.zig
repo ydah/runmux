@@ -16,6 +16,7 @@ pub const Options = struct {
     command: Command = .run,
     config_path: []const u8 = default_config_path,
     profile_name: ?[]const u8 = null,
+    force: bool = false,
     plain: bool = false,
     log_dir: ?[]const u8 = null,
     exit_on_critical_failure: bool = false,
@@ -55,6 +56,10 @@ pub fn parse(args: []const [:0]const u8) ParseError!Options {
             index += 1;
             if (index >= args.len) return error.MissingValue;
             result.profile_name = args[index];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--force")) {
+            result.force = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--plain")) {
@@ -101,7 +106,7 @@ pub const help_text =
     \\Usage:
     \\  runmux run [--config runmux.json] [--profile dev] [--plain] [--log-dir logs] [--exit-on-critical-failure] [--theme dark|light|mono]
     \\  runmux check [--config runmux.json] [--profile dev]
-    \\  runmux init [--config runmux.json]
+    \\  runmux init [--config runmux.json] [--force]
     \\  runmux list [--config runmux.json] [--profile dev]
     \\  runmux --help
     \\  runmux --version
@@ -134,6 +139,13 @@ test "parse plain run option" {
     const opts = try parse(&args);
     try std.testing.expectEqual(Command.run, opts.command);
     try std.testing.expect(opts.plain);
+}
+
+test "parse force init option" {
+    const args = [_][:0]const u8{ "runmux", "init", "--force" };
+    const opts = try parse(&args);
+    try std.testing.expectEqual(Command.init, opts.command);
+    try std.testing.expect(opts.force);
 }
 
 test "parse log dir option" {
