@@ -1,0 +1,43 @@
+<svg width="1180" height="640" viewBox="0 0 1180 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">runmux TUI preview</title>
+  <desc id="desc">A preview of runmux showing process status and logs.</desc>
+  <rect width="1180" height="640" rx="14" fill="#101820"/>
+  <rect x="18" y="18" width="1144" height="604" rx="10" fill="#111c27" stroke="#314356"/>
+  <rect x="18" y="18" width="1144" height="44" rx="10" fill="#274a7a"/>
+  <path d="M18 52H1162" stroke="#274a7a" stroke-width="20"/>
+  <text x="40" y="46" fill="#f6fbff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">runmux | profile: dev | running: 3/4 | selected: api | logs: all</text>
+  <text x="40" y="94" fill="#eaf2f8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">Processes</text>
+  <text x="492" y="94" fill="#eaf2f8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">Logs</text>
+  <path d="M456 80V558" stroke="#35485a" stroke-width="2"/>
+  <rect x="36" y="116" width="390" height="44" rx="6" fill="#1f2d3d"/>
+  <circle cx="62" cy="138" r="7" fill="#58d68d"/>
+  <text x="82" y="145" fill="#f6fbff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">R  api           pid 42810  ok</text>
+  <rect x="36" y="172" width="390" height="44" rx="6" fill="#142232"/>
+  <circle cx="62" cy="194" r="7" fill="#58d68d"/>
+  <text x="82" y="201" fill="#cfe2ef" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">R  web           pid 42842  ok</text>
+  <rect x="36" y="228" width="390" height="44" rx="6" fill="#142232"/>
+  <circle cx="62" cy="250" r="7" fill="#f6c85f"/>
+  <text x="82" y="257" fill="#cfe2ef" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">S  worker        pid 42861  check</text>
+  <rect x="36" y="284" width="390" height="44" rx="6" fill="#142232"/>
+  <circle cx="62" cy="306" r="7" fill="#6c7a89"/>
+  <text x="82" y="313" fill="#cfe2ef" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">P  docs          -          manual</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">
+    <text x="492" y="132" fill="#8dd8ff">12:00:01 [db:stdout]</text>
+    <text x="700" y="132" fill="#d9e7f2">database ready on localhost:5432</text>
+    <text x="492" y="168" fill="#8dd8ff">12:00:02 [api:system]</text>
+    <text x="720" y="168" fill="#58d68d">health checking</text>
+    <text x="492" y="204" fill="#8dd8ff">12:00:03 [api:stdout]</text>
+    <text x="720" y="204" fill="#d9e7f2">listening on http://localhost:8080</text>
+    <text x="492" y="240" fill="#8dd8ff">12:00:03 [api:system]</text>
+    <text x="720" y="240" fill="#58d68d">health ok</text>
+    <text x="492" y="276" fill="#8dd8ff">12:00:04 [web:stdout]</text>
+    <text x="720" y="276" fill="#d9e7f2">compiled client bundle in 284ms</text>
+    <text x="492" y="312" fill="#8dd8ff">12:00:05 [worker:stderr]</text>
+    <text x="744" y="312" fill="#f6c85f">retrying queue connection</text>
+    <text x="492" y="348" fill="#8dd8ff">12:00:06 [worker:system]</text>
+    <text x="754" y="348" fill="#58d68d">health ok</text>
+  </g>
+  <rect x="18" y="558" width="1144" height="64" fill="#202a35"/>
+  <text x="40" y="585" fill="#f6fbff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">Up/Down j/k select  Enter start/stop  r restart  a start-all  x stop-all  Tab logs</text>
+  <text x="40" y="610" fill="#f6fbff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">/ search  i stdin  s stream-filter  f process-filter  u clear  p pause  ? help  q quit</text>
+</svg>
